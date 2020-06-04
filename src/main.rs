@@ -3,12 +3,15 @@
 #[macro_use]
 extern crate derive_new;
 extern crate rand;
+extern crate rayon;
 
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
+use std::sync::Arc;
 use rand::Rng;
 use vec3::Vec3;
+use rayon::prelude::*;
 
 mod vec3;
 
@@ -160,12 +163,6 @@ fn random_in_unit_disk() -> Vec3 {
     }
 }
 
-trait Hittable {
-    // in: a ray to test, a range of valid hits
-    // out: a HitRec (a point, a normal, and a t value)
-    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> (bool, Option<HitRec>);
-}
-
 #[derive(new)]
 struct Sphere {
     center: Vec3,
@@ -173,7 +170,7 @@ struct Sphere {
     material: Material,
 }
 
-impl Hittable for Sphere {
+impl Sphere {
     fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> (bool, Option<HitRec>) {
         let oc = r.origin - self.center;
         let a = r.direction.length2();
@@ -250,7 +247,7 @@ impl Camera {
     }
 }
 
-fn ray_color(r: Ray, world: &Vec<Box<dyn Hittable>>, depth: u32) -> Vec3 {
+fn ray_color(r: Ray, world: &Vec<Sphere>, depth: u32) -> Vec3 {
     if depth > MAX_DEPTH {
         return Vec3::new_const(0.0);
     }
@@ -284,7 +281,7 @@ fn ray_color(r: Ray, world: &Vec<Box<dyn Hittable>>, depth: u32) -> Vec3 {
     Vec3::new(0.5,0.7,1.0)*t + Vec3::new_const(1.0)*(1.0-t)
 }
 
-fn balls_demo() -> (Camera, Vec<Box<dyn Hittable>>) {
+fn balls_demo() -> (Camera, Vec<Sphere>) {
     let lookfrom = Vec3::new(3.0, 3.0, 2.0);
     let lookat = Vec3::new(0.0, 0.0, -1.0);
     let vup = Vec3::new(0.0, 1.0, 0.0);
@@ -297,50 +294,42 @@ fn balls_demo() -> (Camera, Vec<Box<dyn Hittable>>) {
 
     (cam, 
     vec![
-        Box::new(Sphere::new(
+        Sphere::new(
             Vec3::new(0.0,0.0,-1.0),
             0.5,
             Material::Lambertian(Lambertian::new(Vec3::new(0.1, 0.2, 0.5))),
-        )),
-        Box::new(Sphere::new(
+        ),
+        Sphere::new(
             Vec3::new(0.0,-100.5,-1.0),
             100.0,
             Material::Lambertian(Lambertian::new(Vec3::new(0.8, 0.8, 0.0))),
-        )),
-        Box::new(Sphere::new(
+        ),
+        Sphere::new(
             Vec3::new(1.0,0.0,-1.0),
             0.5,
             Material::Metal(Metal::new(Vec3::new(0.8, 0.6, 0.2), 0.3)),
-        )),
-        Box::new(Sphere::new(
+        ),
+        Sphere::new(
             Vec3::new(-1.0,0.0,-1.0),
             0.5,
             Material::Dielectric(Dielectric::new(1.5)),
-        )),
-        Box::new(Sphere::new(
+        ),
+        Sphere::new(
             Vec3::new(-1.0,0.0,-1.0),
             -0.45,
             Material::Dielectric(Dielectric::new(1.5)),
-        )),
+        ),
     ])
 }
 
-fn random_spheres_demo() -> (Camera, Vec<Box<dyn Hittable>>) {
-    let lookfrom = Vec3::new(13.0,2.0,3.0);
-    let lookat = Vec3::new(0.0,0.0,0.0);
-    let vup = Vec3::new(0.0,1.0,0.0);
-    let dist_to_focus = 10.0;
-    let aperture = 0.1;
-
-    let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus);
-    
-    let mut world : Vec<Box<dyn Hittable>> = vec![];
+fn random_spheres_demo() -> Vec<Sphere> {
+    let mut world : Vec<Sphere> = vec![];
     
     // Ground
     let ground_material = Material::Lambertian(
         Lambertian::new(Vec3::new_const(0.5))
     );
-    world.push(Box::new(Sphere::new(Vec3::new(0.0,-1000.0,0.0), 1000.0, ground_material)));
+    world.push(Sphere::new(Vec3::new(0.0,-1000.0,0.0), 1000.0, ground_material));
 
     // Random spheres
     let mut rng = rand::thread_rng();
@@ -357,28 +346,28 @@ fn random_spheres_demo() -> (Camera, Vec<Box<dyn Hittable>>) {
                 if choose_mat < 0.8 {
                     let albedo = Vec3::random() * Vec3::random();
                     world.push(
-                        Box::new(Sphere::new(
+                        Sphere::new(
                             center, 0.2,
                             Material::Lambertian(Lambertian::new(albedo))
-                        ))
+                        )
                     );
                 }
                 else if choose_mat < 0.95 {
                     let albedo = Vec3::random_range(0.5, 1.0);
                     let fuzz = rng.gen_range(0.0, 0.5);
                      world.push(
-                        Box::new(Sphere::new(
+                        Sphere::new(
                             center, 0.2,
                             Material::Metal(Metal::new(albedo,fuzz))
-                        ))
+                        )
                     );
                 }
                 else {
                     world.push(
-                        Box::new(Sphere::new(
+                        Sphere::new(
                             center, 0.2,
                             Material::Dielectric(Dielectric::new(1.5))
-                        ))
+                        )
                     );
                 }
             }
@@ -387,54 +376,90 @@ fn random_spheres_demo() -> (Camera, Vec<Box<dyn Hittable>>) {
 
     // Three big spheres
     world.push(
-        Box::new(Sphere::new(
+        Sphere::new(
             Vec3::new(0.0, 1.0, 0.0), 1.0,
             Material::Dielectric(Dielectric::new(1.5))
-        ))
+        )
     );
     world.push(
-        Box::new(Sphere::new(
+        Sphere::new(
             Vec3::new(-4.0, 1.0, 0.0), 1.0,
             Material::Lambertian(Lambertian::new(Vec3::new(0.4, 0.2, 0.1)))
-        ))
+        )
     );
     world.push(
-        Box::new(Sphere::new(
+        Sphere::new(
             Vec3::new(4.0, 1.0, 0.0), 1.0,
             Material::Metal(Metal::new(Vec3::new(0.7, 0.6, 0.5), 0.0))
-        ))
+        )
     );
 
-    (cam, world)
+    world
 }
 
 fn main() -> Result<(), std::io::Error> {
-    let mut pixels: Vec<Vec3> = vec![0; WIDTH * HEIGHT];
-    let mut rng = rand::thread_rng();
-    let file = File::create("output.ppm").unwrap();
-    let mut wr = BufWriter::new(&file);
-
-    writeln!(&mut wr, "P3")?;
-    writeln!(&mut wr, "{} {}", WIDTH, HEIGHT)?;
-    writeln!(&mut wr, "255")?;
+    let mut pixels: Vec<Vec3> = vec![Vec3::new_const(0.0); WIDTH * HEIGHT];
 
     // Camera and world
     // let (cam, world) = balls_demo();
-    let (cam, world) = random_spheres_demo();
+    eprintln!("Generating scene...");
+    let world = random_spheres_demo();
+    let rc_world = Arc::new(world);
 
-    for y in {0..HEIGHT}.rev() {
-        eprintln!("Rows remaining: {}", y);
-        for x in {0..WIDTH} {
+    let radius = 14.0;
+
+    let mut angle = 0.0_f32;
+    let mut file_idx = 0;
+    while angle < 360.0 {
+        // Set up camera
+        let look_x = radius*angle.to_radians().cos();
+        let look_z = radius*angle.to_radians().sin();
+        let lookfrom = Vec3::new(look_x,2.0,look_z);
+        let lookat = Vec3::new(0.0,0.0,0.0);
+        let vup = Vec3::new(0.0,1.0,0.0);
+        let dist_to_focus = 10.0;
+        let aperture = 0.1;
+
+        let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus);
+        let rc_cam = Arc::new(cam);
+
+        // Trace rays
+        pixels.par_iter_mut().enumerate().for_each(|(i,pix)| {
+            let x = i % WIDTH;
+            let y = i / WIDTH;
+            let thread_world = rc_world.clone();
+            let thread_cam = rc_cam.clone();
+            let mut rng = rand::thread_rng();
             let mut c = Vec3::new_const(0.0);
             for _ in {0..SAMPLES_PER_PIXEL} {
                 let u = ((x as f32)+rng.gen::<f32>()) / ((WIDTH-1) as f32);
                 let v = ((y as f32)+rng.gen::<f32>()) / ((HEIGHT-1) as f32);
-                c += ray_color(cam.get_ray(u,v), &world, 1);
+                c += ray_color(thread_cam.get_ray(u,v), &thread_world, 1);
             }
             c /= (SAMPLES_PER_PIXEL as f32);
-            let (ir, ig, ib) = c.to_color();
-            writeln!(&mut wr, "{} {} {}", ir, ig, ib)?;
+            *pix = c;
+        });
+        
+        // Write output
+        let filename = format!("output_{:04}.ppm", file_idx);
+        eprintln!("Wrote frame {}...", filename);
+        let file = File::create(filename).unwrap();
+        let mut wr = BufWriter::new(&file);
+
+        writeln!(&mut wr, "P3")?;
+        writeln!(&mut wr, "{} {}", WIDTH, HEIGHT)?;
+        writeln!(&mut wr, "255")?;
+
+        for y in {0..HEIGHT}.rev() {
+            for x in {0..WIDTH} {
+                let (ir, ig, ib) = pixels[y*WIDTH+x].to_color();
+                writeln!(&mut wr, "{} {} {}", ir, ig, ib)?;
+            }
         }
+
+        angle += 0.5;
+        file_idx += 1;
     }
+
     Ok(())
 }
