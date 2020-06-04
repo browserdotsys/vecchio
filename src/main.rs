@@ -333,8 +333,8 @@ fn random_spheres_demo() -> Vec<Sphere> {
 
     // Random spheres
     let mut rng = rand::thread_rng();
-    for a in {-11..11} {
-        for b in {-11..11} {
+    for a in -11..11 {
+        for b in -11..11 {
             let choose_mat = rng.gen::<f32>();
             let center = Vec3::new(
                 a as f32 + 0.9*rng.gen::<f32>(),
@@ -431,12 +431,12 @@ fn main() -> Result<(), std::io::Error> {
             let thread_cam = rc_cam.clone();
             let mut rng = rand::thread_rng();
             let mut c = Vec3::new_const(0.0);
-            for _ in {0..SAMPLES_PER_PIXEL} {
+            for _ in 0..SAMPLES_PER_PIXEL {
                 let u = ((x as f32)+rng.gen::<f32>()) / ((WIDTH-1) as f32);
                 let v = ((y as f32)+rng.gen::<f32>()) / ((HEIGHT-1) as f32);
                 c += ray_color(thread_cam.get_ray(u,v), &thread_world, 1);
             }
-            c /= (SAMPLES_PER_PIXEL as f32);
+            c /= SAMPLES_PER_PIXEL as f32;
             *pix = c;
         });
         
@@ -451,7 +451,7 @@ fn main() -> Result<(), std::io::Error> {
         writeln!(&mut wr, "255")?;
 
         for y in {0..HEIGHT}.rev() {
-            for x in {0..WIDTH} {
+            for x in 0..WIDTH {
                 let (ir, ig, ib) = pixels[y*WIDTH+x].to_color();
                 writeln!(&mut wr, "{} {} {}", ir, ig, ib)?;
             }
