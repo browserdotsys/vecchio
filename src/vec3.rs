@@ -9,7 +9,7 @@ pub struct Vec3 {
 
 impl Vec3 {
     pub fn new_const(x: f32) -> Vec3 {
-        Vec3 { x: x, y: x, z: x }
+        Vec3 { x, y: x, z: x }
     }
 
     pub fn zero() -> Vec3 {
@@ -47,13 +47,13 @@ impl Vec3 {
 
     fn clamp(x: f32, min: f32, max: f32) -> f32 {
         if x < min {
-            return min;
+            min
         }
         else if x > max {
-            return max;
+            max
         }
         else {
-            return x;
+            x
         }
     }
 

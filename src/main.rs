@@ -227,14 +227,15 @@ impl Camera {
         let horizontal = u*viewport_width*focus_dist;
         let vertical = v*viewport_height*focus_dist;
         let lower_left_corner = origin - horizontal/2.0 - vertical/2.0 - w*focus_dist;
+        let lens_radius = aperture / 2.0;
         
         Camera {
-            origin: origin,
-            lower_left_corner: lower_left_corner,
-            horizontal: horizontal,
-            vertical: vertical,
-            u: u, v: v, w: w,
-            lens_radius: aperture / 2.0,
+            origin,
+            lower_left_corner,
+            horizontal,
+            vertical,
+            u, v, w,
+            lens_radius,
         }
     }
 
@@ -247,7 +248,7 @@ impl Camera {
     }
 }
 
-fn ray_color(r: Ray, world: &Vec<Sphere>, depth: u32) -> Vec3 {
+fn ray_color(r: Ray, world: &[Sphere], depth: u32) -> Vec3 {
     if depth > MAX_DEPTH {
         return Vec3::new_const(0.0);
     }
@@ -264,8 +265,7 @@ fn ray_color(r: Ray, world: &Vec<Sphere>, depth: u32) -> Vec3 {
             }
         }
     }
-    if !closest.is_none() {
-        let c = closest.unwrap();
+    if let Some(c) = closest {
         let (did_scatter, attenuation, scattered) = c.material.scatter(r, &c);
         if did_scatter {
             return attenuation * ray_color(scattered, &world, depth + 1);
