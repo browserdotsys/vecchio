@@ -8,7 +8,6 @@ extern crate rayon;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
-use std::sync::Arc;
 use rand::Rng;
 use vec3::Vec3;
 use rayon::prelude::*;
@@ -171,7 +170,7 @@ struct Sphere {
 }
 
 impl Sphere {
-    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> (bool, Option<HitRec>) {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
         let oc = r.origin - self.center;
         let a = r.direction.length2();
         let half_b = oc.dot(r.direction);
@@ -190,12 +189,12 @@ impl Sphere {
                             self.material
                     );
                     ret.set_face_normal(r, (ret.p - self.center) / self.radius);
-                    return (true, Some(ret));
+                    return Some(ret);
                 }
             }
         }
 
-        (false, None)
+        None
     }
 }
 
@@ -256,9 +255,7 @@ fn ray_color(r: Ray, world: &[Sphere], depth: u32) -> Vec3 {
     let mut tnear = f32::INFINITY;
     let mut closest : Option<HitRec> = None;
     for w in world {
-        let (hit, rec_o) = w.hit(&r, 0.001, tnear);
-        if hit {
-            let rec = rec_o.unwrap();
+        if let Some(rec) = w.hit(&r, 0.001, tnear) {
             if rec.t < tnear {
                 tnear = rec.t;
                 closest = Some(rec);
@@ -404,7 +401,6 @@ fn main() -> Result<(), std::io::Error> {
     // let (cam, world) = balls_demo();
     eprintln!("Generating scene...");
     let world = random_spheres_demo();
-    let rc_world = Arc::new(world);
 
     let radius = 14.0;
 
@@ -421,20 +417,17 @@ fn main() -> Result<(), std::io::Error> {
         let aperture = 0.1;
 
         let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus);
-        let rc_cam = Arc::new(cam);
 
         // Trace rays
         pixels.par_iter_mut().enumerate().for_each(|(i,pix)| {
             let x = i % WIDTH;
             let y = i / WIDTH;
-            let thread_world = rc_world.clone();
-            let thread_cam = rc_cam.clone();
             let mut rng = rand::thread_rng();
             let mut c = Vec3::new_const(0.0);
             for _ in 0..SAMPLES_PER_PIXEL {
                 let u = ((x as f32)+rng.gen::<f32>()) / ((WIDTH-1) as f32);
                 let v = ((y as f32)+rng.gen::<f32>()) / ((HEIGHT-1) as f32);
-                c += ray_color(thread_cam.get_ray(u,v), &thread_world, 1);
+                c += ray_color(cam.get_ray(u,v), &world, 1);
             }
             c /= SAMPLES_PER_PIXEL as f32;
             *pix = c;
