@@ -227,14 +227,15 @@ impl Camera {
         let horizontal = u*viewport_width*focus_dist;
         let vertical = v*viewport_height*focus_dist;
         let lower_left_corner = origin - horizontal/2.0 - vertical/2.0 - w*focus_dist;
+        let lens_radius = aperture / 2.0;
         
         Camera {
-            origin: origin,
-            lower_left_corner: lower_left_corner,
-            horizontal: horizontal,
-            vertical: vertical,
-            u: u, v: v, w: w,
-            lens_radius: aperture / 2.0,
+            origin,
+            lower_left_corner,
+            horizontal,
+            vertical,
+            u, v, w,
+            lens_radius,
         }
     }
 
@@ -247,7 +248,7 @@ impl Camera {
     }
 }
 
-fn ray_color(r: Ray, world: &Vec<Sphere>, depth: u32) -> Vec3 {
+fn ray_color(r: Ray, world: &[Sphere], depth: u32) -> Vec3 {
     if depth > MAX_DEPTH {
         return Vec3::new_const(0.0);
     }
@@ -264,8 +265,7 @@ fn ray_color(r: Ray, world: &Vec<Sphere>, depth: u32) -> Vec3 {
             }
         }
     }
-    if !closest.is_none() {
-        let c = closest.unwrap();
+    if let Some(c) = closest {
         let (did_scatter, attenuation, scattered) = c.material.scatter(r, &c);
         if did_scatter {
             return attenuation * ray_color(scattered, &world, depth + 1);
@@ -333,8 +333,8 @@ fn random_spheres_demo() -> Vec<Sphere> {
 
     // Random spheres
     let mut rng = rand::thread_rng();
-    for a in {-11..11} {
-        for b in {-11..11} {
+    for a in -11..11 {
+        for b in -11..11 {
             let choose_mat = rng.gen::<f32>();
             let center = Vec3::new(
                 a as f32 + 0.9*rng.gen::<f32>(),
@@ -431,12 +431,12 @@ fn main() -> Result<(), std::io::Error> {
             let thread_cam = rc_cam.clone();
             let mut rng = rand::thread_rng();
             let mut c = Vec3::new_const(0.0);
-            for _ in {0..SAMPLES_PER_PIXEL} {
+            for _ in 0..SAMPLES_PER_PIXEL {
                 let u = ((x as f32)+rng.gen::<f32>()) / ((WIDTH-1) as f32);
                 let v = ((y as f32)+rng.gen::<f32>()) / ((HEIGHT-1) as f32);
                 c += ray_color(thread_cam.get_ray(u,v), &thread_world, 1);
             }
-            c /= (SAMPLES_PER_PIXEL as f32);
+            c /= SAMPLES_PER_PIXEL as f32;
             *pix = c;
         });
         
@@ -451,7 +451,7 @@ fn main() -> Result<(), std::io::Error> {
         writeln!(&mut wr, "255")?;
 
         for y in {0..HEIGHT}.rev() {
-            for x in {0..WIDTH} {
+            for x in 0..WIDTH {
                 let (ir, ig, ib) = pixels[y*WIDTH+x].to_color();
                 writeln!(&mut wr, "{} {} {}", ir, ig, ib)?;
             }
