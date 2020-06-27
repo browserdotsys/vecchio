@@ -102,13 +102,13 @@ impl Material {
         match self {
             Material::Lambertian(ref l) => {
                 let scatter_direction = rec.normal + Lambertian::random();
-                let scattered = Ray::new(rec.p, scatter_direction);
+                let scattered = Ray::new_with_time(rec.p, scatter_direction, r.time);
                 let attenuation = l.albedo;
                 (true, attenuation, scattered)
             },
             Material::Metal(ref m) => {
                 let reflected = reflect(r.direction.unit_vector(), rec.normal);
-                let scattered = Ray::new(rec.p, reflected + random_in_unit_sphere()*m.fuzz);
+                let scattered = Ray::new_with_time(rec.p, reflected + random_in_unit_sphere()*m.fuzz, r.time);
                 let attenuation = m.albedo;
                 let did_scatter = scattered.direction.dot(rec.normal) > 0.0;
                 (did_scatter, attenuation, scattered)
@@ -122,17 +122,17 @@ impl Material {
                 let sin_theta = (1.0 - cos_theta*cos_theta).sqrt();
                 if etai_over_etat * sin_theta > 1.0 {
                     let reflected = reflect(unit_direction, rec.normal);
-                    let scattered = Ray::new(rec.p, reflected);
+                    let scattered = Ray::new_with_time(rec.p, reflected, r.time);
                     return (true, attenuation, scattered);
                 }
                 let reflect_prob = schlick(cos_theta, etai_over_etat);
                 if rng.gen::<f32>() < reflect_prob {
                     let reflected = reflect(unit_direction, rec.normal);
-                    let scattered = Ray::new(rec.p, reflected);
+                    let scattered = Ray::new_with_time(rec.p, reflected, r.time);
                     return (true, attenuation, scattered);
                 }
                 let refracted = refract(unit_direction, rec.normal, etai_over_etat);
-                let scattered = Ray::new(rec.p, refracted);
+                let scattered = Ray::new_with_time(rec.p, refracted, r.time);
                 (true, attenuation, scattered)
             }
         }
@@ -211,6 +211,52 @@ impl Hittable for Sphere {
     }
 }
 
+#[derive(new)]
+struct MovingSphere {
+    center0: Vec3,
+    center1: Vec3,
+    time0: f32,
+    time1: f32,
+    radius: f32,
+    material: Material,
+}
+
+impl MovingSphere {
+    fn center(&self, time: f32) -> Vec3 {
+        self.center0 + (self.center1 - self.center0) *
+                       ((time - self.time0) / (self.time1 - self.time0))
+    }
+}
+
+impl Hittable for MovingSphere {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        let oc = r.origin - self.center(r.time);
+        let a = r.direction.length2();
+        let half_b = oc.dot(r.direction);
+        let c = oc.length2() - self.radius*self.radius;
+        let discriminant = half_b*half_b - a*c;
+
+        if discriminant > 0.0 {
+            let root = discriminant.sqrt();
+            for temp in &[(-half_b - root) / a, (-half_b + root) / a] {
+                if tmin < *temp && *temp < tmax {
+                    let mut ret = HitRec::new(
+                            r.at(*temp),
+                            (r.at(*temp) - self.center(r.time)) / self.radius,
+                            *temp,
+                            false,
+                            self.material
+                    );
+                    ret.set_face_normal(r, (ret.p - self.center(r.time)) / self.radius);
+                    return Some(ret);
+                }
+            }
+        }
+
+        None
+    }
+}
+
 struct Camera {
     origin: Vec3,
     lower_left_corner: Vec3,
@@ -266,7 +312,7 @@ impl Camera {
     }
 }
 
-fn ray_color(r: Ray, world: &Vec<Box<dyn Hittable+Sync>>, depth: u32) -> Vec3 {
+fn ray_color(r: Ray, world: &Vec<Box<dyn Hittable+Send+Sync>>, depth: u32) -> Vec3 {
     if depth > MAX_DEPTH {
         return Vec3::new_const(0.0);
     }
@@ -338,8 +384,8 @@ fn ray_color(r: Ray, world: &Vec<Box<dyn Hittable+Sync>>, depth: u32) -> Vec3 {
 //    ])
 //}
 
-fn random_spheres_demo() -> Vec<Box<dyn Hittable+Sync>> {
-    let mut world : Vec<Box<dyn Hittable+Sync>> = vec![];
+fn random_spheres_demo() -> Vec<Box<dyn Hittable+Send+Sync>> {
+    let mut world : Vec<Box<dyn Hittable+Send+Sync>> = vec![];
     
     // Ground
     let ground_material = Material::Lambertian(
@@ -361,9 +407,10 @@ fn random_spheres_demo() -> Vec<Box<dyn Hittable+Sync>> {
             if (center - Vec3::new(4.0,0.2,0.0)).length() > 0.9 {
                 if choose_mat < 0.8 {
                     let albedo = Vec3::random() * Vec3::random();
+                    let center2 = center + Vec3::new(0.0, rng.gen_range(0.0, 0.5), 0.0);
                     world.push(Box::new(
-                        Sphere::new(
-                            center, 0.2,
+                        MovingSphere::new(
+                            center, center2, 0.0, 1.0, 0.2,
                             Material::Lambertian(Lambertian::new(albedo))
                         ))
                     );
@@ -423,7 +470,7 @@ fn main() -> Result<(), std::io::Error> {
 
     let radius = 14.0;
 
-    let mut angle = 0.0_f32;
+    let mut angle = 15.0_f32;
     let mut file_idx = 0;
     while angle < 360.0 {
         // Set up camera
@@ -472,6 +519,7 @@ fn main() -> Result<(), std::io::Error> {
 
         angle += 0.5;
         file_idx += 1;
+        break;
     }
 
     Ok(())
