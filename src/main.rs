@@ -11,6 +11,7 @@ use std::io::BufWriter;
 use rand::Rng;
 use vec3::Vec3;
 use rayon::prelude::*;
+use std::sync::Arc;
 
 mod vec3;
 
@@ -265,7 +266,7 @@ impl Camera {
     }
 }
 
-fn ray_color(r: Ray, world: Vec<Box<Hittable>>, depth: u32) -> Vec3 {
+fn ray_color(r: Ray, world: &Vec<Box<dyn Hittable+Sync>>, depth: u32) -> Vec3 {
     if depth > MAX_DEPTH {
         return Vec3::new_const(0.0);
     }
@@ -337,8 +338,8 @@ fn ray_color(r: Ray, world: Vec<Box<Hittable>>, depth: u32) -> Vec3 {
 //    ])
 //}
 
-fn random_spheres_demo() -> Vec<Box<Hittable>> {
-    let mut world : Vec<Box<Hittable>> = vec![];
+fn random_spheres_demo() -> Vec<Box<dyn Hittable+Sync>> {
+    let mut world : Vec<Box<dyn Hittable+Sync>> = vec![];
     
     // Ground
     let ground_material = Material::Lambertian(
@@ -418,7 +419,7 @@ fn main() -> Result<(), std::io::Error> {
     // Camera and world
     // let (cam, world) = balls_demo();
     eprintln!("Generating scene...");
-    let world = random_spheres_demo();
+    let world = Arc::new(random_spheres_demo());
 
     let radius = 14.0;
 
@@ -438,6 +439,7 @@ fn main() -> Result<(), std::io::Error> {
 
         // Trace rays
         pixels.par_iter_mut().enumerate().for_each(|(i,pix)| {
+            let world_clone = world.clone();
             let x = i % WIDTH;
             let y = i / WIDTH;
             let mut rng = rand::thread_rng();
@@ -445,7 +447,7 @@ fn main() -> Result<(), std::io::Error> {
             for _ in 0..SAMPLES_PER_PIXEL {
                 let u = ((x as f32)+rng.gen::<f32>()) / ((WIDTH-1) as f32);
                 let v = ((y as f32)+rng.gen::<f32>()) / ((HEIGHT-1) as f32);
-                c += ray_color(cam.get_ray(u,v), world, 1);
+                c += ray_color(cam.get_ray(u,v), &world_clone, 1);
             }
             c /= SAMPLES_PER_PIXEL as f32;
             *pix = c;
