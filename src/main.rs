@@ -15,18 +15,26 @@ use rayon::prelude::*;
 mod vec3;
 
 const ASPECT_RATIO : f32 = 16.0/9.0;
-const WIDTH: usize = 1024;
+const WIDTH: usize = 640;
 const HEIGHT: usize = ((WIDTH as f32) / ASPECT_RATIO) as usize;
 const SAMPLES_PER_PIXEL: usize = 100;
 const MAX_DEPTH: u32 = 50;
 
-#[derive(new)]
 struct Ray {
     origin: Vec3,
     direction: Vec3,
+    time: f32,
 }
 
 impl Ray {
+    fn new(origin: Vec3, direction: Vec3) -> Ray {
+        Ray::new_with_time(origin, direction, 0.0)
+    }
+
+    fn new_with_time(origin: Vec3, direction: Vec3, time: f32) -> Ray {
+        Ray { origin, direction, time }
+    }
+
     fn at(&self, t: f32) -> Vec3 {
         self.origin + self.direction * t
     }
@@ -162,6 +170,10 @@ fn random_in_unit_disk() -> Vec3 {
     }
 }
 
+trait Hittable {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> ;
+}
+
 #[derive(new)]
 struct Sphere {
     center: Vec3,
@@ -169,7 +181,7 @@ struct Sphere {
     material: Material,
 }
 
-impl Sphere {
+impl Hittable for Sphere {
     fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
         let oc = r.origin - self.center;
         let a = r.direction.length2();
@@ -207,12 +219,15 @@ struct Camera {
     v: Vec3,
     w: Vec3,
     lens_radius: f32,
+    time0: f32,
+    time1: f32,
 }
 
 impl Camera {
     fn new(lookfrom: Vec3, lookat: Vec3, vup: Vec3,
            vfov: f32, aspect_ratio: f32,
-           aperture: f32, focus_dist: f32) -> Camera {
+           aperture: f32, focus_dist: f32,
+           time0: f32, time1: f32) -> Camera {
         let theta = vfov.to_radians();
         let h = (theta/2.0).tan();
         let viewport_height = h * 2.0;
@@ -235,19 +250,22 @@ impl Camera {
             vertical,
             u, v, w,
             lens_radius,
+            time0, time1,
         }
     }
 
     fn get_ray(&self, s: f32, t: f32) -> Ray {
+        let mut rng = rand::thread_rng();
         let rd = random_in_unit_disk() * self.lens_radius;
         let offset = self.u * rd.x + self.v * rd.y;
-        Ray::new(self.origin + offset,
-            self.lower_left_corner + self.horizontal*s + self.vertical*t - self.origin - offset
+        Ray::new_with_time(self.origin + offset,
+            self.lower_left_corner + self.horizontal*s + self.vertical*t - self.origin - offset,
+            rng.gen_range(self.time0, self.time1),
         )
     }
 }
 
-fn ray_color(r: Ray, world: &[Sphere], depth: u32) -> Vec3 {
+fn ray_color(r: Ray, world: Vec<Box<Hittable>>, depth: u32) -> Vec3 {
     if depth > MAX_DEPTH {
         return Vec3::new_const(0.0);
     }
@@ -265,7 +283,7 @@ fn ray_color(r: Ray, world: &[Sphere], depth: u32) -> Vec3 {
     if let Some(c) = closest {
         let (did_scatter, attenuation, scattered) = c.material.scatter(r, &c);
         if did_scatter {
-            return attenuation * ray_color(scattered, &world, depth + 1);
+            return attenuation * ray_color(scattered, world, depth + 1);
         }
         return Vec3::new_const(0.0);
     }
@@ -278,55 +296,55 @@ fn ray_color(r: Ray, world: &[Sphere], depth: u32) -> Vec3 {
     Vec3::new(0.5,0.7,1.0)*t + Vec3::new_const(1.0)*(1.0-t)
 }
 
-fn balls_demo() -> (Camera, Vec<Sphere>) {
-    let lookfrom = Vec3::new(3.0, 3.0, 2.0);
-    let lookat = Vec3::new(0.0, 0.0, -1.0);
-    let vup = Vec3::new(0.0, 1.0, 0.0);
-    let dist_to_focus = (lookfrom - lookat).length();
-    let aperture = 2.0;
-    let cam = Camera::new(
-        lookfrom, lookat, vup,
-        20.0, ASPECT_RATIO,
-        aperture, dist_to_focus);
+//fn balls_demo() -> (Camera, Vec<Hittable>) {
+//    let lookfrom = Vec3::new(3.0, 3.0, 2.0);
+//    let lookat = Vec3::new(0.0, 0.0, -1.0);
+//    let vup = Vec3::new(0.0, 1.0, 0.0);
+//    let dist_to_focus = (lookfrom - lookat).length();
+//    let aperture = 2.0;
+//    let cam = Camera::new(
+//        lookfrom, lookat, vup,
+//        20.0, ASPECT_RATIO,
+//        aperture, dist_to_focus);
+//
+//    (cam, 
+//    vec![
+//        Sphere::new(
+//            Vec3::new(0.0,0.0,-1.0),
+//            0.5,
+//            Material::Lambertian(Lambertian::new(Vec3::new(0.1, 0.2, 0.5))),
+//        ),
+//        Sphere::new(
+//            Vec3::new(0.0,-100.5,-1.0),
+//            100.0,
+//            Material::Lambertian(Lambertian::new(Vec3::new(0.8, 0.8, 0.0))),
+//        ),
+//        Sphere::new(
+//            Vec3::new(1.0,0.0,-1.0),
+//            0.5,
+//            Material::Metal(Metal::new(Vec3::new(0.8, 0.6, 0.2), 0.3)),
+//        ),
+//        Sphere::new(
+//            Vec3::new(-1.0,0.0,-1.0),
+//            0.5,
+//            Material::Dielectric(Dielectric::new(1.5)),
+//        ),
+//        Sphere::new(
+//            Vec3::new(-1.0,0.0,-1.0),
+//            -0.45,
+//            Material::Dielectric(Dielectric::new(1.5)),
+//        ),
+//    ])
+//}
 
-    (cam, 
-    vec![
-        Sphere::new(
-            Vec3::new(0.0,0.0,-1.0),
-            0.5,
-            Material::Lambertian(Lambertian::new(Vec3::new(0.1, 0.2, 0.5))),
-        ),
-        Sphere::new(
-            Vec3::new(0.0,-100.5,-1.0),
-            100.0,
-            Material::Lambertian(Lambertian::new(Vec3::new(0.8, 0.8, 0.0))),
-        ),
-        Sphere::new(
-            Vec3::new(1.0,0.0,-1.0),
-            0.5,
-            Material::Metal(Metal::new(Vec3::new(0.8, 0.6, 0.2), 0.3)),
-        ),
-        Sphere::new(
-            Vec3::new(-1.0,0.0,-1.0),
-            0.5,
-            Material::Dielectric(Dielectric::new(1.5)),
-        ),
-        Sphere::new(
-            Vec3::new(-1.0,0.0,-1.0),
-            -0.45,
-            Material::Dielectric(Dielectric::new(1.5)),
-        ),
-    ])
-}
-
-fn random_spheres_demo() -> Vec<Sphere> {
-    let mut world : Vec<Sphere> = vec![];
+fn random_spheres_demo() -> Vec<Box<Hittable>> {
+    let mut world : Vec<Box<Hittable>> = vec![];
     
     // Ground
     let ground_material = Material::Lambertian(
         Lambertian::new(Vec3::new_const(0.5))
     );
-    world.push(Sphere::new(Vec3::new(0.0,-1000.0,0.0), 1000.0, ground_material));
+    world.push(Box::new(Sphere::new(Vec3::new(0.0,-1000.0,0.0), 1000.0, ground_material)));
 
     // Random spheres
     let mut rng = rand::thread_rng();
@@ -342,29 +360,29 @@ fn random_spheres_demo() -> Vec<Sphere> {
             if (center - Vec3::new(4.0,0.2,0.0)).length() > 0.9 {
                 if choose_mat < 0.8 {
                     let albedo = Vec3::random() * Vec3::random();
-                    world.push(
+                    world.push(Box::new(
                         Sphere::new(
                             center, 0.2,
                             Material::Lambertian(Lambertian::new(albedo))
-                        )
+                        ))
                     );
                 }
                 else if choose_mat < 0.95 {
                     let albedo = Vec3::random_range(0.5, 1.0);
                     let fuzz = rng.gen_range(0.0, 0.5);
-                     world.push(
+                     world.push(Box::new(
                         Sphere::new(
                             center, 0.2,
                             Material::Metal(Metal::new(albedo,fuzz))
-                        )
+                        ))
                     );
                 }
                 else {
-                    world.push(
+                    world.push(Box::new(
                         Sphere::new(
                             center, 0.2,
                             Material::Dielectric(Dielectric::new(1.5))
-                        )
+                        ))
                     );
                 }
             }
@@ -372,23 +390,23 @@ fn random_spheres_demo() -> Vec<Sphere> {
     }
 
     // Three big spheres
-    world.push(
+    world.push(Box::new(
         Sphere::new(
             Vec3::new(0.0, 1.0, 0.0), 1.0,
             Material::Dielectric(Dielectric::new(1.5))
-        )
+        ))
     );
-    world.push(
+    world.push(Box::new(
         Sphere::new(
             Vec3::new(-4.0, 1.0, 0.0), 1.0,
             Material::Lambertian(Lambertian::new(Vec3::new(0.4, 0.2, 0.1)))
-        )
+        ))
     );
-    world.push(
+    world.push(Box::new(
         Sphere::new(
             Vec3::new(4.0, 1.0, 0.0), 1.0,
             Material::Metal(Metal::new(Vec3::new(0.7, 0.6, 0.5), 0.0))
-        )
+        ))
     );
 
     world
@@ -416,7 +434,7 @@ fn main() -> Result<(), std::io::Error> {
         let dist_to_focus = 10.0;
         let aperture = 0.1;
 
-        let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus);
+        let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus, 0.0, 1.0);
 
         // Trace rays
         pixels.par_iter_mut().enumerate().for_each(|(i,pix)| {
@@ -427,7 +445,7 @@ fn main() -> Result<(), std::io::Error> {
             for _ in 0..SAMPLES_PER_PIXEL {
                 let u = ((x as f32)+rng.gen::<f32>()) / ((WIDTH-1) as f32);
                 let v = ((y as f32)+rng.gen::<f32>()) / ((HEIGHT-1) as f32);
-                c += ray_color(cam.get_ray(u,v), &world, 1);
+                c += ray_color(cam.get_ray(u,v), world, 1);
             }
             c /= SAMPLES_PER_PIXEL as f32;
             *pix = c;
