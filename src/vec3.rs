@@ -183,3 +183,21 @@ impl std::ops::DivAssign<f32> for Vec3 {
         };
     }
 }
+
+impl std::ops::Index<usize> for Vec3 {
+    type Output = f32;
+    fn index(&self, i: usize) -> &Self::Output {
+        match i {
+            0 => &self.x,
+            1 => &self.y,
+            2 => &self.z,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl std::cmp::PartialEq for Vec3 {
+    fn eq(&self, other: &Self) -> bool {
+        self.x == other.x && self.y == other.y && self.z == other.z
+    }
+}
