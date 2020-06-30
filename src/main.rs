@@ -12,13 +12,14 @@ use rand::Rng;
 use vec3::Vec3;
 use rayon::prelude::*;
 use std::sync::Arc;
+use std::time::Instant;
 
 mod vec3;
 
 const ASPECT_RATIO : f32 = 16.0/9.0;
-const WIDTH: usize = 640;
+const WIDTH: usize = 1024;
 const HEIGHT: usize = ((WIDTH as f32) / ASPECT_RATIO) as usize;
-const SAMPLES_PER_PIXEL: usize = 100;
+const SAMPLES_PER_PIXEL: usize = 500;
 const MAX_DEPTH: u32 = 50;
 
 #[derive(Copy,Clone)]
@@ -189,6 +190,24 @@ struct SolidColor {
 impl Texture for SolidColor {
     fn value(&self, _u: f32, _v: f32, _p: Vec3) -> Vec3 {
         self.color_value
+    }
+}
+
+#[derive(new)]
+struct Checker {
+    odd: Arc<TextureSS>,
+    even: Arc<TextureSS>,
+}
+
+impl Texture for Checker {
+    fn value(&self, u: f32, v: f32, p: Vec3) -> Vec3 {
+        let sins = (10.0*p.x).sin()*(10.0*p.y).sin()*(10.0*p.z).sin();
+        if sins < 0.0 {
+            return self.odd.value(u,v,p);
+        }
+        else {
+            return self.even.value(u,v,p);
+        }
     }
 }
 
@@ -621,8 +640,12 @@ fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
 
 fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
     // Ground
+    let checker = Checker::new(
+        Arc::new(SolidColor::new(Vec3::new(0.2, 0.3, 0.1))),
+        Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))),
+    );
     let ground_material = Arc::new(
-        Lambertian::new(Arc::new(SolidColor::new(Vec3::new_const(0.5))))
+        Lambertian::new(Arc::new(checker))
     );
     world.push(Arc::new(Sphere::new(Vec3::new(0.0,-1000.0,0.0), 1000.0, ground_material)));
 
@@ -691,6 +714,28 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
     );
 }
 
+fn two_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
+    let checker = Checker::new(
+        Arc::new(SolidColor::new(Vec3::new(0.2, 0.3, 0.1))),
+        Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))),
+    );
+    let ground_material = Arc::new(
+        Lambertian::new(Arc::new(checker))
+    );
+    world.push(Arc::new(
+        Sphere::new(
+            Vec3::new(0.0, -10.0, 0.0), 10.0,
+            ground_material.clone()
+        )
+    ));
+    world.push(Arc::new(
+        Sphere::new(
+            Vec3::new(0.0, 10.0, 0.0), 10.0,
+            ground_material.clone()
+        )
+    ));
+}
+
 fn main() -> Result<(), std::io::Error> {
     let mut pixels: Vec<Vec3> = vec![Vec3::new_const(0.0); WIDTH * HEIGHT];
 
@@ -704,9 +749,12 @@ fn main() -> Result<(), std::io::Error> {
 
     let radius = 14.0;
 
-    let mut angle = 0.0_f32;
+    let mut angle = 25.0_f32;
     let mut file_idx = 0;
     while angle < 360.0 {
+        // Timing
+        let start = Instant::now();
+        
         // Set up camera
         let look_x = radius*angle.to_radians().cos();
         let look_z = radius*angle.to_radians().sin();
@@ -737,8 +785,7 @@ fn main() -> Result<(), std::io::Error> {
         
         // Write output
         let filename = format!("output_{:04}.ppm", file_idx);
-        eprintln!("Wrote frame {}...", filename);
-        let file = File::create(filename).unwrap();
+        let file = File::create(filename.clone()).unwrap();
         let mut wr = BufWriter::new(&file);
 
         writeln!(&mut wr, "P3")?;
@@ -751,6 +798,7 @@ fn main() -> Result<(), std::io::Error> {
                 writeln!(&mut wr, "{} {} {}", ir, ig, ib)?;
             }
         }
+        eprintln!("Wrote frame {} in {}s", filename, start.elapsed().as_secs());
 
         angle += 0.5;
         file_idx += 1;
