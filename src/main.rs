@@ -42,44 +42,37 @@ impl Ray {
     }
 }
 
-#[derive(Debug,Copy,Clone)]
+#[derive(new)]
 struct HitRec {
     p: Vec3,
     normal: Vec3,
     t: f32,
+    u: f32,
+    v: f32,
     front: bool,
-    material: Material,
-    objid: u8,
+    material: Arc<MaterialSS>,
 }
 
 impl HitRec {
-    fn new(p: Vec3, normal: Vec3, t: f32, front: bool, material: Material) -> HitRec {
-        HitRec::new_named(p, normal, t, front, material, 0)
-    }
-
-    fn new_named(p: Vec3, normal: Vec3, t: f32, front: bool, material: Material, objid: u8) -> HitRec {
-        HitRec { p, normal, t, front, material, objid }
-    }
-
     fn set_face_normal(&mut self, r: &Ray, outward_normal: Vec3) {
         self.front = r.direction.dot(outward_normal) < 0.0;
         self.normal = if self.front { outward_normal } else { -outward_normal };
     }
 }
 
-#[derive(Debug,new,Copy,Clone)]
+#[derive(new)]
 struct Lambertian {
-    albedo: Vec3,
+    albedo: Arc<TextureSS>,
 }
 
-#[derive(Debug,new,Copy,Clone)]
+#[derive(new)]
 struct Dielectric {
     ref_idx: f32,
 }
 
-#[derive(Debug,new,Copy,Clone)]
+#[derive(new)]
 struct Metal {
-    albedo: Vec3,
+    albedo: Arc<TextureSS>,
     fuzz: f32,
 }
 
@@ -100,54 +93,10 @@ fn schlick(cosine: f32, ref_idx: f32) -> f32 {
     r0 + (1.0-r0) * (1.0 - cosine).powf(5.0)
 }
 
-#[derive(Debug,Copy,Clone)]
-enum Material {
-    Lambertian(Lambertian),
-    Metal(Metal),
-    Dielectric(Dielectric),
+trait Material {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) ;
 }
-
-impl Material {
-    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
-        match self {
-            Material::Lambertian(ref l) => {
-                let scatter_direction = rec.normal + Lambertian::random();
-                let scattered = Ray::new_with_time(rec.p, scatter_direction, r.time);
-                let attenuation = l.albedo;
-                (true, attenuation, scattered)
-            },
-            Material::Metal(ref m) => {
-                let reflected = reflect(r.direction.unit_vector(), rec.normal);
-                let scattered = Ray::new_with_time(rec.p, reflected + random_in_unit_sphere()*m.fuzz, r.time);
-                let attenuation = m.albedo;
-                let did_scatter = scattered.direction.dot(rec.normal) > 0.0;
-                (did_scatter, attenuation, scattered)
-            }
-            Material::Dielectric(ref d) => {
-                let mut rng = rand::thread_rng();
-                let attenuation = Vec3::new_const(1.0);
-                let etai_over_etat = if rec.front { 1.0 / d.ref_idx } else { d.ref_idx };
-                let unit_direction = r.direction.unit_vector();
-                let cos_theta = (-unit_direction).dot(rec.normal).min(1.0);
-                let sin_theta = (1.0 - cos_theta*cos_theta).sqrt();
-                if etai_over_etat * sin_theta > 1.0 {
-                    let reflected = reflect(unit_direction, rec.normal);
-                    let scattered = Ray::new_with_time(rec.p, reflected, r.time);
-                    return (true, attenuation, scattered);
-                }
-                let reflect_prob = schlick(cos_theta, etai_over_etat);
-                if rng.gen::<f32>() < reflect_prob {
-                    let reflected = reflect(unit_direction, rec.normal);
-                    let scattered = Ray::new_with_time(rec.p, reflected, r.time);
-                    return (true, attenuation, scattered);
-                }
-                let refracted = refract(unit_direction, rec.normal, etai_over_etat);
-                let scattered = Ray::new_with_time(rec.p, refracted, r.time);
-                (true, attenuation, scattered)
-            }
-        }
-    }
-}
+type MaterialSS = dyn Material+Send+Sync;
 
 impl Lambertian {
     fn random() -> Vec3 {
@@ -159,6 +108,51 @@ impl Lambertian {
         Vec3::new(r*a.cos(), r*a.sin(), z)
     }
 }
+
+impl Material for Lambertian {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
+        let scatter_direction = rec.normal + Lambertian::random();
+        let scattered = Ray::new_with_time(rec.p, scatter_direction, r.time);
+        let attenuation = self.albedo.value(rec.u, rec.v, rec.p);
+        (true, attenuation, scattered)
+    }
+}
+
+impl Material for Metal {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
+        let reflected = reflect(r.direction.unit_vector(), rec.normal);
+        let scattered = Ray::new_with_time(rec.p, reflected + random_in_unit_sphere()*self.fuzz, r.time);
+        let attenuation = self.albedo.value(rec.u, rec.v, rec.p);
+        let did_scatter = scattered.direction.dot(rec.normal) > 0.0;
+        (did_scatter, attenuation, scattered)
+    }
+}
+
+impl Material for Dielectric {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
+        let mut rng = rand::thread_rng();
+        let attenuation = Vec3::new_const(1.0);
+        let etai_over_etat = if rec.front { 1.0 / self.ref_idx } else { self.ref_idx };
+        let unit_direction = r.direction.unit_vector();
+        let cos_theta = (-unit_direction).dot(rec.normal).min(1.0);
+        let sin_theta = (1.0 - cos_theta*cos_theta).sqrt();
+        if etai_over_etat * sin_theta > 1.0 {
+            let reflected = reflect(unit_direction, rec.normal);
+            let scattered = Ray::new_with_time(rec.p, reflected, r.time);
+            return (true, attenuation, scattered);
+        }
+        let reflect_prob = schlick(cos_theta, etai_over_etat);
+        if rng.gen::<f32>() < reflect_prob {
+            let reflected = reflect(unit_direction, rec.normal);
+            let scattered = Ray::new_with_time(rec.p, reflected, r.time);
+            return (true, attenuation, scattered);
+        }
+        let refracted = refract(unit_direction, rec.normal, etai_over_etat);
+        let scattered = Ray::new_with_time(rec.p, refracted, r.time);
+        (true, attenuation, scattered)
+    }
+}
+
 
 fn random_in_unit_sphere() -> Vec3 {
     loop {
@@ -184,8 +178,10 @@ fn random_in_unit_disk() -> Vec3 {
 trait Texture {
     fn value(&self, u: f32, v: f32, p: Vec3) -> Vec3 ;
 }
+type TextureSS = dyn Texture+Send+Sync;
 
 
+#[derive(new)]
 struct SolidColor {
     color_value: Vec3,
 }
@@ -203,19 +199,19 @@ trait Hittable {
 
 type HittableSS = dyn Hittable+Send+Sync;
 
+#[derive(new)]
 struct Sphere {
     center: Vec3,
     radius: f32,
-    material: Material,
-    objid: u8,
+    material: Arc<MaterialSS>,
 }
 
 impl Sphere {
-    fn new(center: Vec3, radius: f32, material: Material) -> Sphere {
-        Sphere::new_named(center, radius, material, 0)
-    }
-    fn new_named(center: Vec3, radius: f32, material: Material, objid: u8) -> Sphere {
-        Sphere { center, radius, material, objid }
+    fn to_spherical(p: Vec3) -> (f32, f32) {
+        let pi = std::f32::consts::PI;
+        let phi = p.z.atan2(p.x);
+        let theta = p.y.asin();
+        (1.0 - (phi + pi) / 2.0*pi, (theta + pi/2.0) / pi)
     }
 }
 
@@ -231,15 +227,18 @@ impl Hittable for Sphere {
             let root = discriminant.sqrt();
             for temp in &[(-half_b - root) / a, (-half_b + root) / a] {
                 if tmin < *temp && *temp < tmax {
-                    let mut ret = HitRec::new_named(
+                    let mut ret = HitRec::new(
                             r.at(*temp),
                             (r.at(*temp) - self.center) / self.radius,
                             *temp,
+                            0.0, 0.0,
                             false,
-                            self.material,
-                            self.objid,
+                            self.material.clone(),
                     );
                     ret.set_face_normal(r, (ret.p - self.center) / self.radius);
+                    let (u, v) = Sphere::to_spherical((ret.p - self.center) / self.radius);
+                    ret.u = u;
+                    ret.v = v;
                     return Some(ret);
                 }
             }
@@ -263,7 +262,7 @@ struct MovingSphere {
     time0: f32,
     time1: f32,
     radius: f32,
-    material: Material,
+    material: Arc<MaterialSS>,
 }
 
 impl MovingSphere {
@@ -289,10 +288,14 @@ impl Hittable for MovingSphere {
                             r.at(*temp),
                             (r.at(*temp) - self.center(r.time)) / self.radius,
                             *temp,
+                            0.0, 0.0,
                             false,
-                            self.material
+                            self.material.clone()
                     );
                     ret.set_face_normal(r, (ret.p - self.center(r.time)) / self.radius);
+                    let (u, v) = Sphere::to_spherical((ret.p - self.center(r.time)) / self.radius);
+                    ret.u = u;
+                    ret.v = v;
                     return Some(ret);
                 }
             }
@@ -418,9 +421,9 @@ impl Hittable for BVHNode {
         }
 
         let rec_left = self.left.hit(r, tmin, tmax);
-        let tmax_new = if let Some(r) = rec_left { r.t } else { tmax };
+        let tmax_new = if let Some(r) = rec_left.as_ref() { r.t } else { tmax };
         let rec_right = self.right.hit(r, tmin, tmax_new);
-        match (rec_left, rec_right) {
+        match (rec_left.as_ref(), rec_right.as_ref()) {
             (Some(l), Some(r)) => {
                 if l.t < r.t {
                     return rec_left;
@@ -577,51 +580,49 @@ fn ray_color(r: Ray, world: Arc<dyn Hittable>, depth: u32) -> Vec3 {
 
 fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
     world.push(Arc::new(
-        Sphere::new_named(
+        Sphere::new(
             Vec3::new(0.0,0.0,-1.0),
             0.5,
-            Material::Lambertian(Lambertian::new(Vec3::new(0.1, 0.2, 0.5))),
-            2
+            Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.1, 0.2, 0.5))))),
         ),
     ));
     world.push(Arc::new(
-        Sphere::new_named(
+        Sphere::new(
             Vec3::new(0.0,-100.5,-1.0),
             100.0,
-            Material::Lambertian(Lambertian::new(Vec3::new(0.8, 0.8, 0.0))),
-            1
+            Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.8, 0.8, 0.0))))),
         ),
     ));
     world.push(Arc::new(
-        Sphere::new_named(
+        Sphere::new(
             Vec3::new(1.0,0.0,-1.0),
             0.5,
-            Material::Metal(Metal::new(Vec3::new(0.8, 0.6, 0.2), 0.3)),
-            3
+            Arc::new(Metal::new(
+                    Arc::new(SolidColor::new(Vec3::new(0.8, 0.6, 0.2))),
+                    0.3
+            )),
         ),
     ));
     world.push(Arc::new(
-        Sphere::new_named(
+        Sphere::new(
             Vec3::new(-1.0,0.0,-1.0),
             0.5,
-            Material::Dielectric(Dielectric::new(1.5)),
-            4
+            Arc::new(Dielectric::new(1.5)),
         ),
     ));
     world.push(Arc::new(
-        Sphere::new_named(
+        Sphere::new(
             Vec3::new(-1.0,0.0,-1.0),
             -0.45,
-            Material::Dielectric(Dielectric::new(1.5)),
-            5
+            Arc::new(Dielectric::new(1.5)),
         ),
     ));
 }
 
 fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
     // Ground
-    let ground_material = Material::Lambertian(
-        Lambertian::new(Vec3::new_const(0.5))
+    let ground_material = Arc::new(
+        Lambertian::new(Arc::new(SolidColor::new(Vec3::new_const(0.5))))
     );
     world.push(Arc::new(Sphere::new(Vec3::new(0.0,-1000.0,0.0), 1000.0, ground_material)));
 
@@ -643,17 +644,17 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
                     world.push(Arc::new(
                         MovingSphere::new(
                             center, center2, 0.0, 1.0, 0.2,
-                            Material::Lambertian(Lambertian::new(albedo))
+                            Arc::new(Lambertian::new(Arc::new(SolidColor::new(albedo))))
                         ))
                     );
                 }
                 else if choose_mat < 0.95 {
-                    let albedo = Vec3::random_range(0.5, 1.0);
+                    let albedo = SolidColor::new(Vec3::random_range(0.5, 1.0));
                     let fuzz = rng.gen_range(0.0, 0.5);
                      world.push(Arc::new(
                         Sphere::new(
                             center, 0.2,
-                            Material::Metal(Metal::new(albedo,fuzz))
+                            Arc::new(Metal::new(Arc::new(albedo),fuzz))
                         ))
                     );
                 }
@@ -661,7 +662,7 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
                     world.push(Arc::new(
                         Sphere::new(
                             center, 0.2,
-                            Material::Dielectric(Dielectric::new(1.5))
+                            Arc::new(Dielectric::new(1.5))
                         ))
                     );
                 }
@@ -673,19 +674,19 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
     world.push(Arc::new(
         Sphere::new(
             Vec3::new(0.0, 1.0, 0.0), 1.0,
-            Material::Dielectric(Dielectric::new(1.5))
+            Arc::new(Dielectric::new(1.5))
         ))
     );
     world.push(Arc::new(
         Sphere::new(
             Vec3::new(-4.0, 1.0, 0.0), 1.0,
-            Material::Lambertian(Lambertian::new(Vec3::new(0.4, 0.2, 0.1)))
+            Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.4, 0.2, 0.1)))))
         ))
     );
     world.push(Arc::new(
         Sphere::new(
             Vec3::new(4.0, 1.0, 0.0), 1.0,
-            Material::Metal(Metal::new(Vec3::new(0.7, 0.6, 0.5), 0.0))
+            Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.7, 0.6, 0.5))), 0.0))
         ))
     );
 }
