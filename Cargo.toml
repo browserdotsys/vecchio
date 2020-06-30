@@ -13,3 +13,4 @@ debug = true
 derive-new = "0.5"
 rand = "0.7.3"
 rayon = "1.3.0"
+png = "0.16.6"

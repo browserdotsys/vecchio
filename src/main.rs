@@ -211,6 +211,47 @@ impl Texture for Checker {
     }
 }
 
+struct ImageTexture {
+    buf: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+const BPP: usize = 3;
+impl ImageTexture {
+    fn new(path: &str) -> ImageTexture {
+        let decoder = png::Decoder::new(File::open(path).unwrap());
+        let (info, mut reader) = decoder.read_info().unwrap();
+        let mut buf = vec![0; info.buffer_size()];
+        reader.next_frame(&mut buf).unwrap();
+        ImageTexture {
+            buf: buf,
+            width: info.width as usize,
+            height: info.height as usize,
+        }
+    }
+}
+
+impl Texture for ImageTexture {
+    fn value(&self, u: f32, v: f32, _p: Vec3) -> Vec3 {
+        let u = Vec3::clamp(u, 0.0, 1.0);
+        let v = 1.0 - Vec3::clamp(v, 0.0, 1.0);
+        let mut i = (u * self.width as f32) as usize;
+        let mut j = (v * self.height as f32) as usize;
+        if i >= self.width { i = self.width - 1; }
+        if j >= self.height { j = self.height - 1; }
+        
+        let buf_start = j*self.width*BPP + i*BPP;
+        let pix = &self.buf[buf_start..buf_start+BPP];
+        let color_scale = 1.0 / 255.0;
+        Vec3::new(
+            color_scale * pix[0] as f32,
+            color_scale * pix[1] as f32,
+            color_scale * pix[2] as f32,
+        )
+    }
+}
+
 trait Hittable {
     fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> ;
     fn bounding_box(&self, t0: f32, t1: f32) -> Option<AxisBB> ;
@@ -230,7 +271,10 @@ impl Sphere {
         let pi = std::f32::consts::PI;
         let phi = p.z.atan2(p.x);
         let theta = p.y.asin();
-        (1.0 - (phi + pi) / 2.0*pi, (theta + pi/2.0) / pi)
+        let u = 1.0-((phi + pi)/(2.0*pi));
+        let v = (theta + pi/2.0) / pi;
+        //eprintln!("Sphere: ({}, {}, {}) -> ({}, {}) ({}, {})", p.x, p.y, p.z, phi, theta, u, v);
+        (u, v)
     }
 }
 
@@ -700,10 +744,18 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
             Arc::new(Dielectric::new(1.5))
         ))
     );
+    /*
     world.push(Arc::new(
         Sphere::new(
             Vec3::new(-4.0, 1.0, 0.0), 1.0,
             Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.4, 0.2, 0.1)))))
+        ))
+    );
+    */
+    world.push(Arc::new(
+        Sphere::new(
+            Vec3::new(-4.0, 1.0, 0.0), 1.0,
+            Arc::new(Lambertian::new(Arc::new(ImageTexture::new("assets/earthmap.png"))))
         ))
     );
     world.push(Arc::new(
@@ -745,11 +797,12 @@ fn main() -> Result<(), std::io::Error> {
     let mut world_vec : Vec<Arc<HittableSS>> = vec![];
     random_spheres_demo(&mut world_vec);
     //balls_demo(&mut world_vec);
+    //two_spheres_demo(&mut world_vec);
     let world_bvh = Arc::new(BVHNode::new(&mut world_vec[..], 0.0, 1.0));
 
     let radius = 14.0;
 
-    let mut angle = 25.0_f32;
+    let mut angle = 30.0_f32;
     let mut file_idx = 0;
     while angle < 360.0 {
         // Timing
@@ -762,7 +815,15 @@ fn main() -> Result<(), std::io::Error> {
         let lookat = Vec3::new(0.0,0.0,0.0);
         let vup = Vec3::new(0.0,1.0,0.0);
         let dist_to_focus = 10.0;
-        let aperture = 0.1;
+        let aperture = 0.0;
+
+/*
+        let lookfrom = Vec3::new(13.0, 2.0, 3.0);
+        let lookat = Vec3::new(0.0,0.0,0.0);
+        let vup = Vec3::new(0.0,1.0,0.0);
+        let dist_to_focus = 10.0;
+        let aperture = 0.0;
+*/
 
         let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus, 0.0, 1.0);
 
