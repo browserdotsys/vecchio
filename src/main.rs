@@ -19,8 +19,8 @@ mod vec3;
 const ASPECT_RATIO : f32 = 16.0/9.0;
 const WIDTH: usize = 1024;
 const HEIGHT: usize = ((WIDTH as f32) / ASPECT_RATIO) as usize;
-const SAMPLES_PER_PIXEL: usize = 500;
-const MAX_DEPTH: u32 = 50;
+const SAMPLES_PER_PIXEL: usize = 100;
+const MAX_DEPTH: u32 = 100;
 
 #[derive(Copy,Clone)]
 struct Ray {
@@ -380,6 +380,93 @@ impl Hittable for MovingSphere {
     }
 }
 
+#[derive(new)]
+struct Rect {
+    c0: f32,
+    c1: f32,
+    d0: f32,
+    d1: f32,
+    k: f32,
+    axis0: usize,
+    axis1: usize,
+    axis2: usize,
+    mat: Arc<MaterialSS>,
+}
+
+impl Rect {
+    fn XYRect(x0: f32, x1: f32, y0: f32, y1: f32, k: f32, mat: Arc<MaterialSS>) -> Rect {
+        Rect::new(x0, x1, y0, y1, k, 0, 1, 2, mat)
+    }
+
+    fn XZRect(x0: f32, x1: f32, z0: f32, z1: f32, k: f32, mat: Arc<MaterialSS>) -> Rect {
+        Rect::new(x0, x1, z0, z1, k, 0, 2, 1, mat)
+    }
+
+    fn YZRect(y0: f32, y1: f32, z0: f32, z1: f32, k: f32, mat: Arc<MaterialSS>) -> Rect {
+        Rect::new(y0, y1, z0, z1, k, 1, 2, 0, mat)
+    }
+}
+
+impl Hittable for Rect {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        let t = (self.k-r.origin[self.axis2]) / r.direction[self.axis2];
+        if t < tmin || t > tmax {
+            return None;
+        }
+        let a = r.origin[self.axis0] + t*r.direction[self.axis0];
+        let b = r.origin[self.axis1] + t*r.direction[self.axis1];
+        if a < self.c0 || a > self.c1 || b < self.d0 || b > self.d1 {
+            return None;
+        }
+        let mut outward_normal = Vec3::new_const(0.0);
+        outward_normal[self.axis2] = 1.0;
+        let u = (a-self.c0)/(self.c1-self.c0);
+        let v = (b-self.d0)/(self.d1-self.d0);
+
+        let mut ret = HitRec::new(
+            r.at(t),
+            Vec3::new_const(0.0), // overwritten later
+            t, u, v,
+            false,                // overwritten later
+            self.mat.clone(),
+        );
+        ret.set_face_normal(r, outward_normal);
+        Some(ret)
+    }
+
+    fn bounding_box(&self, _t0: f32, _t1: f32) -> Option<AxisBB> {
+        // Make the box a little thicc to prevent zero division
+        let mut v1 = Vec3::new_const(0.0);
+        let mut v2 = Vec3::new_const(0.0);
+        v1[self.axis0] = self.c0;
+        v1[self.axis1] = self.d0;
+        v1[self.axis2] = self.k - 0.0001;
+        v2[self.axis0] = self.c1;
+        v2[self.axis1] = self.d1;
+        v2[self.axis2] = self.k + 0.0001;
+        Some(AxisBB::new(v1, v2))
+    }
+}
+
+#[derive(new)]
+struct FlipFace {
+    ptr: Arc<HittableSS>
+}
+
+impl Hittable for FlipFace {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        if let Some(h) = self.ptr.hit(r, tmin, tmax) {
+            Some(HitRec::new(h.p, h.normal, h.t, h.u, h.v, !h.front, h.material))
+        }
+        else {
+            return None;
+        }
+    }
+    fn bounding_box(&self, t0: f32, t1: f32) -> Option<AxisBB> {
+        self.ptr.bounding_box(t0, t1)
+    }
+}
+
 impl Hittable for Vec<Arc<HittableSS>> {
     fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
         let mut closest_dist = tmax;
@@ -685,7 +772,7 @@ fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
 fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
     // Ground
     let checker = Checker::new(
-        Arc::new(SolidColor::new(Vec3::new(0.2, 0.3, 0.1))),
+        Arc::new(SolidColor::new(Vec3::new(0.1, 0.1, 0.1))),
         Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))),
     );
     let ground_material = Arc::new(
@@ -710,7 +797,7 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
                     let center2 = center + Vec3::new(0.0, rng.gen_range(0.0, 0.5), 0.0);
                     world.push(Arc::new(
                         MovingSphere::new(
-                            center, center2, 0.0, 1.0, 0.2,
+                            center, center, 0.0, 1.0, 0.2,
                             Arc::new(Lambertian::new(Arc::new(SolidColor::new(albedo))))
                         ))
                     );
@@ -742,8 +829,8 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
         Sphere::new(
             Vec3::new(0.0, 1.0, 0.0), 1.0,
             Arc::new(Dielectric::new(1.5))
-        ))
-    );
+        )
+    ));
     /*
     world.push(Arc::new(
         Sphere::new(
@@ -756,14 +843,26 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
         Sphere::new(
             Vec3::new(-4.0, 1.0, 0.0), 1.0,
             Arc::new(Lambertian::new(Arc::new(ImageTexture::new("assets/earthmap.png"))))
-        ))
-    );
+        )
+    ));
     world.push(Arc::new(
         Sphere::new(
             Vec3::new(4.0, 1.0, 0.0), 1.0,
             Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.7, 0.6, 0.5))), 0.0))
-        ))
-    );
+        )
+    ));
+
+    // Mirrors
+    world.push(Arc::new(
+        Rect::XYRect(-8.0, 0.0, 0.0, 3.5, -3.0,
+            Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
+        )
+    ));
+    world.push(Arc::new(
+        Rect::XYRect(-8.0, -0.0, 0.0, 3.5, 3.0,
+            Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
+        )
+    ));
 }
 
 fn two_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
@@ -802,7 +901,7 @@ fn main() -> Result<(), std::io::Error> {
 
     let radius = 14.0;
 
-    let mut angle = 30.0_f32;
+    let mut angle = 0.0_f32;
     let mut file_idx = 0;
     while angle < 360.0 {
         // Timing
@@ -816,14 +915,6 @@ fn main() -> Result<(), std::io::Error> {
         let vup = Vec3::new(0.0,1.0,0.0);
         let dist_to_focus = 10.0;
         let aperture = 0.0;
-
-/*
-        let lookfrom = Vec3::new(13.0, 2.0, 3.0);
-        let lookat = Vec3::new(0.0,0.0,0.0);
-        let vup = Vec3::new(0.0,1.0,0.0);
-        let dist_to_focus = 10.0;
-        let aperture = 0.0;
-*/
 
         let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus, 0.0, 1.0);
 
