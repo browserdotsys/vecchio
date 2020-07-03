@@ -273,7 +273,6 @@ impl Sphere {
         let theta = p.y.asin();
         let u = 1.0-((phi + pi)/(2.0*pi));
         let v = (theta + pi/2.0) / pi;
-        //eprintln!("Sphere: ({}, {}, {}) -> ({}, {}) ({}, {})", p.x, p.y, p.z, phi, theta, u, v);
         (u, v)
     }
 }
@@ -394,14 +393,17 @@ struct Rect {
 }
 
 impl Rect {
+    #[allow(non_snake_case)]
     fn XYRect(x0: f32, x1: f32, y0: f32, y1: f32, k: f32, mat: Arc<MaterialSS>) -> Rect {
         Rect::new(x0, x1, y0, y1, k, 0, 1, 2, mat)
     }
 
+    #[allow(non_snake_case)]
     fn XZRect(x0: f32, x1: f32, z0: f32, z1: f32, k: f32, mat: Arc<MaterialSS>) -> Rect {
         Rect::new(x0, x1, z0, z1, k, 0, 2, 1, mat)
     }
 
+    #[allow(non_snake_case)]
     fn YZRect(y0: f32, y1: f32, z0: f32, z1: f32, k: f32, mat: Arc<MaterialSS>) -> Rect {
         Rect::new(y0, y1, z0, z1, k, 1, 2, 0, mat)
     }
@@ -464,6 +466,36 @@ impl Hittable for FlipFace {
     }
     fn bounding_box(&self, t0: f32, t1: f32) -> Option<AxisBB> {
         self.ptr.bounding_box(t0, t1)
+    }
+}
+
+struct Boxy {
+    box_min: Vec3,
+    box_max: Vec3,
+    sides: Vec<Arc<HittableSS>>,
+}
+
+impl Boxy {
+    fn new(p0: Vec3, p1: Vec3, mat: Arc<MaterialSS>) -> Boxy {
+        let sides : Vec<Arc<HittableSS>> = vec![
+            Arc::new(Rect::XYRect(p0.x, p1.x, p0.y, p1.y, p1.z, mat.clone())),
+            Arc::new(FlipFace::new(Arc::new(Rect::XYRect(p0.x, p1.x, p0.y, p1.y, p0.z, mat.clone())))),
+            Arc::new(Rect::XZRect(p0.x, p1.x, p0.z, p1.z, p1.y, mat.clone())),
+            Arc::new(FlipFace::new(Arc::new(Rect::XZRect(p0.x, p1.x, p0.z, p1.z, p0.y, mat.clone())))),
+            Arc::new(Rect::YZRect(p0.y, p1.y, p0.z, p1.z, p1.x, mat.clone())),
+            Arc::new(FlipFace::new(Arc::new(Rect::YZRect(p0.y, p1.y, p0.z, p1.z, p0.x, mat.clone())))),
+        ];
+        Boxy { box_min: p0, box_max: p1, sides }
+    }
+}
+
+impl Hittable for Boxy {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        self.sides.hit(r, tmin, tmax)
+    }
+
+    fn bounding_box(&self, _t0: f32, _t1: f32) -> Option<AxisBB> {
+        Some(AxisBB::new(self.box_min, self.box_max))
     }
 }
 
@@ -607,7 +639,7 @@ impl BVHNode {
         )
     }
 
-    fn new(objects: &mut [Arc<HittableSS>], time0: f32, time1: f32) -> BVHNode {
+    fn new(objects: &mut [Arc<HittableSS>]) -> BVHNode {
         let mut rng = rand::thread_rng();
         let axis = rng.gen_range(0,3);
 
@@ -641,13 +673,52 @@ impl BVHNode {
                 }
             );
             let (left_part, right_part) = objects.split_at_mut(objects.len()/2);
-            let left = Arc::new(BVHNode::new(left_part, time0, time1));
-            let right = Arc::new(BVHNode::new(right_part, time0, time1));
+            let left = Arc::new(BVHNode::new(left_part));
+            let right = Arc::new(BVHNode::new(right_part));
             let bb = AxisBB::surrounding_box(
                 left.bounding_box(0.0, 0.0).unwrap(),
                 right.bounding_box(0.0, 0.0).unwrap(),
             );
             return BVHNode { left, right, bb };
+        }
+    }
+}
+
+#[derive(new)]
+struct Translate {
+    ptr: Arc<HittableSS>,
+    offset: Vec3,
+}
+
+impl Hittable for Translate {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        let moved_r = Ray::new_with_time(r.origin - self.offset, r.direction, r.time);
+        if let Some(rec) = self.ptr.hit(&moved_r, tmin, tmax) {
+            let mut moved_rec = HitRec::new(
+                rec.p + self.offset,
+                rec.normal,
+                rec.t,
+                rec.u,
+                rec.v,
+                rec.front,
+                rec.material,
+            );
+            moved_rec.set_face_normal(&moved_r, rec.normal);
+            Some(moved_rec)
+        }
+        else {
+            None
+        }
+    }
+    fn bounding_box(&self, t0: f32, t1: f32) -> Option<AxisBB> {
+        if let Some(bb) = self.ptr.bounding_box(t0, t1) {
+            Some(AxisBB::new(
+                bb.min + self.offset,
+                bb.max + self.offset,
+            ))
+        }
+        else {
+            None
         }
     }
 }
@@ -794,10 +865,9 @@ fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
             if (center - Vec3::new(4.0,0.2,0.0)).length() > 0.9 {
                 if choose_mat < 0.8 {
                     let albedo = Vec3::random() * Vec3::random();
-                    let center2 = center + Vec3::new(0.0, rng.gen_range(0.0, 0.5), 0.0);
                     world.push(Arc::new(
-                        MovingSphere::new(
-                            center, center, 0.0, 1.0, 0.2,
+                        Sphere::new(
+                            center, 0.2,
                             Arc::new(Lambertian::new(Arc::new(SolidColor::new(albedo))))
                         ))
                     );
@@ -887,6 +957,183 @@ fn two_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
     ));
 }
 
+struct Bowser {
+    parts: Arc<HittableSS>,
+}
+
+impl Bowser {
+    fn new(x: f32, y: f32, z: f32) -> Bowser {
+        let mut world : Vec<Arc<HittableSS>> = vec![];
+        // Face
+        world.push(Arc::new(
+            Rect::XYRect(x-2.0, x+2.0, y+1.0, y+4.0, z-3.0,
+                Arc::new(Lambertian::new(Arc::new(ImageTexture::new("assets/bowser_face.png"))))
+            )
+        ));
+        // Top
+        world.push(Arc::new(
+            Rect::XZRect(x-2.0, x+2.0, z-6.0, z-3.0, y+4.0,
+                Arc::new(Lambertian::new(Arc::new(ImageTexture::new("assets/bowser_top.png"))))
+            )
+        ));
+        // Back
+        world.push(Arc::new(
+            Rect::XYRect(x-2.0, x+2.0, y+1.0, y+4.0, z-6.0,
+                Arc::new(Lambertian::new(Arc::new(ImageTexture::new("assets/bowser_back.png"))))
+            )
+        ));
+        // Sides
+        world.push(Arc::new(
+            Rect::YZRect(y+1.0, y+4.0, z-6.0, z-3.0, x-2.0,
+                Arc::new(Lambertian::new(Arc::new(ImageTexture::new("assets/bowser_side.png"))))
+            )
+        ));
+        world.push(Arc::new(
+            Rect::YZRect(y+1.0, y+4.0, z-6.0, z-3.0, x+2.0,
+                Arc::new(Lambertian::new(Arc::new(ImageTexture::new("assets/bowser_side.png"))))
+            )
+        ));
+        // Bottom
+        let grey = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.278, 0.387, 0.438)))));
+        world.push(Arc::new(
+            Rect::XZRect(x-2.0, x+2.0, z-6.0, z-3.0, y+1.0, grey.clone()
+            )
+        ));
+        // Feet
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-1.5, y+0.5, z-4.75),
+                Vec3::new(x-0.5, y+1.0, z-4.25),
+                grey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+0.5, y+0.5, z-4.75),
+                Vec3::new(x+1.5, y+1.0, z-4.25),
+                grey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-1.5, y+0.25, z-4.75),
+                Vec3::new(x-0.5, y+0.5, z-3.5),
+                grey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+0.5, y+0.25, z-4.75),
+                Vec3::new(x+1.5, y+0.5, z-3.5),
+                grey.clone(),
+            )
+        ));
+        // Arms
+        let brown = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.4, 0.2, 0.1)))));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-2.25, y+1.75, z-4.65),
+                Vec3::new(x-2.00, y+2.75, z-4.35),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-2.50, y+1.75, z-4.65),
+                Vec3::new(x-2.25, y+2.50, z-4.35),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-2.75, y+1.75, z-4.65),
+                Vec3::new(x-2.50, y+2.25, z-4.35),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+2.00, y+1.75, z-4.65),
+                Vec3::new(x+2.25, y+2.75, z-4.35),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+2.25, y+1.75, z-4.65),
+                Vec3::new(x+2.50, y+2.50, z-4.35),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+2.50, y+1.75, z-4.65),
+                Vec3::new(x+2.75, y+2.25, z-4.35),
+                brown.clone(),
+            )
+        ));
+        // Face rim
+        let lightgrey = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.601, 0.687, 0.723)))));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-2.0, y+3.875, z-3.00),
+                Vec3::new(x+2.0, y+4.00, z-2.875),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-2.0, y+1.0, z-3.00),
+                Vec3::new(x+2.0, y+1.125, z-2.875),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-2.0, y+1.125, z-3.00),
+                Vec3::new(x-1.875, y+3.875, z-2.875),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+1.875, y+1.125, z-3.00),
+                Vec3::new(x+2.0, y+3.875, z-2.875),
+                lightgrey.clone(),
+            )
+        ));
+        Bowser { parts: Arc::new(BVHNode::new(&mut world[..])) }
+    }
+}
+
+impl Hittable for Bowser {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        self.parts.hit(r, tmin, tmax)
+    }
+    fn bounding_box(&self, t0: f32, t1: f32) -> Option<AxisBB> {
+        self.parts.bounding_box(t0, t1)
+    }
+}
+
+fn bowser_demo(world: &mut Vec<Arc<HittableSS>>) {
+    // Ground
+    let checker = Checker::new(
+        Arc::new(SolidColor::new(Vec3::new(0.1, 0.1, 0.1))),
+        Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))),
+    );
+    let ground_material = Arc::new(
+        Lambertian::new(Arc::new(checker))
+    );
+    world.push(Arc::new(Sphere::new(Vec3::new(0.0,-1000.0,0.0), 1000.0, ground_material)));
+
+    // Bowser! Goofed a little when creating by putting him .25 units
+    // off the ground, so fix that with a Translate here
+    world.push(Arc::new(Translate::new(
+        Arc::new(Bowser::new(0.0,0.0,0.0)),
+        Vec3::new(0.0, -0.25, 0.0),
+    )));
+}
+
 fn main() -> Result<(), std::io::Error> {
     let mut pixels: Vec<Vec3> = vec![Vec3::new_const(0.0); WIDTH * HEIGHT];
 
@@ -894,12 +1141,13 @@ fn main() -> Result<(), std::io::Error> {
     // let (cam, world) = balls_demo();
     eprintln!("Generating scene...");
     let mut world_vec : Vec<Arc<HittableSS>> = vec![];
-    random_spheres_demo(&mut world_vec);
+    //random_spheres_demo(&mut world_vec);
     //balls_demo(&mut world_vec);
     //two_spheres_demo(&mut world_vec);
-    let world_bvh = Arc::new(BVHNode::new(&mut world_vec[..], 0.0, 1.0));
+    bowser_demo(&mut world_vec);
+    let world_bvh = Arc::new(BVHNode::new(&mut world_vec[..]));
 
-    let radius = 14.0;
+    let radius = 20.0;
 
     let mut angle = 0.0_f32;
     let mut file_idx = 0;
@@ -908,10 +1156,11 @@ fn main() -> Result<(), std::io::Error> {
         let start = Instant::now();
         
         // Set up camera
-        let look_x = radius*angle.to_radians().cos();
-        let look_z = radius*angle.to_radians().sin();
-        let lookfrom = Vec3::new(look_x,2.0,look_z);
-        let lookat = Vec3::new(0.0,0.0,0.0);
+        let look_x = radius*(angle+90.0).to_radians().cos();
+        let look_z = radius*(angle+90.0).to_radians().sin();
+        let lookfrom = Vec3::new(look_x,1.5,look_z);
+        //let lookfrom = Vec3::new(0.0,0.0,15.0);
+        let lookat = Vec3::new(0.0,1.5,-3.0);
         let vup = Vec3::new(0.0,1.0,0.0);
         let dist_to_focus = 10.0;
         let aperture = 0.0;
