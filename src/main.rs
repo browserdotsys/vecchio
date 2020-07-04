@@ -1102,6 +1102,67 @@ impl Bowser {
                 lightgrey.clone(),
             )
         ));
+
+        // Butt ports
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-1.875, y+1.625, z-6.125),
+                Vec3::new(x-0.875, y+1.75, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-1.875, y+1.125, z-6.125),
+                Vec3::new(x-0.875, y+1.25, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-1.875, y+1.25, z-6.125),
+                Vec3::new(x-1.750, y+1.625, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x-1.0, y+1.25, z-6.125),
+                Vec3::new(x-0.875, y+1.625, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+0.875, y+1.625, z-6.125),
+                Vec3::new(x+1.875, y+1.75, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+0.875, y+1.125, z-6.125),
+                Vec3::new(x+1.875, y+1.25, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+1.750, y+1.25, z-6.125),
+                Vec3::new(x+1.875, y+1.625, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(x+0.875, y+1.25, z-6.125),
+                Vec3::new(x+1.0, y+1.625, z-6.0),
+                lightgrey.clone(),
+            )
+        ));
+
+
         Bowser { parts: Arc::new(BVHNode::new(&mut world[..])) }
     }
 }
