@@ -240,7 +240,7 @@ impl Texture for ImageTexture {
         let mut j = (v * self.height as f32) as usize;
         if i >= self.width { i = self.width - 1; }
         if j >= self.height { j = self.height - 1; }
-        
+
         let buf_start = j*self.width*BPP + i*BPP;
         let pix = &self.buf[buf_start..buf_start+BPP];
         let color_scale = 1.0 / 255.0;
@@ -477,6 +477,9 @@ struct Boxy {
 
 impl Boxy {
     fn new(p0: Vec3, p1: Vec3, mat: Arc<MaterialSS>) -> Boxy {
+        assert!(p0.x < p1.x);
+        assert!(p0.y < p1.y);
+        assert!(p0.z < p1.z);
         let sides : Vec<Arc<HittableSS>> = vec![
             Arc::new(Rect::XYRect(p0.x, p1.x, p0.y, p1.y, p1.z, mat.clone())),
             Arc::new(FlipFace::new(Arc::new(Rect::XYRect(p0.x, p1.x, p0.y, p1.y, p0.z, mat.clone())))),
@@ -723,6 +726,13 @@ impl Hittable for Translate {
     }
 }
 
+struct Rotate {
+    ptr: Arc<HittableSS>,
+    sin_theta: f32,
+    cos_theta: f32,
+    bb: Option<AxisBB>,
+}
+
 struct Camera {
     origin: Vec3,
     lower_left_corner: Vec3,
@@ -755,7 +765,7 @@ impl Camera {
         let vertical = v*viewport_height*focus_dist;
         let lower_left_corner = origin - horizontal/2.0 - vertical/2.0 - w*focus_dist;
         let lens_radius = aperture / 2.0;
-        
+
         Camera {
             origin,
             lower_left_corner,
@@ -1162,6 +1172,61 @@ impl Bowser {
             )
         ));
 
+        // Mirrors
+        world.push(Arc::new(
+            Rect::XYRect(-5.0, 5.0, 0.0, 6.0, -8.0,
+                Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
+            )
+        ));
+        world.push(Arc::new(
+            Rect::XYRect(-5.0, 5.0, 0.0, 6.0, 8.0,
+                Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
+            )
+        ));
+
+        // Mirror frame
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(-5.25, 6.0, 7.75),
+                Vec3::new(5.25, 6.25, 8.0),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(-5.25, 0.0, 7.75),
+                Vec3::new(-5.00, 6.0, 8.0),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(5.00, 0.0, 7.75),
+                Vec3::new(5.25, 6.0, 8.0),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(-5.25, 6.0, -8.0),
+                Vec3::new(5.25, 6.25, -7.75),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(-5.25, 0.0, -8.0),
+                Vec3::new(-5.00, 6.0, -7.75),
+                brown.clone(),
+            )
+        ));
+        world.push(Arc::new(
+            Boxy::new(
+                Vec3::new(5.00, 0.0, -8.8),
+                Vec3::new(5.25, 6.0, -7.75),
+                brown.clone(),
+            )
+        ));
 
         Bowser { parts: Arc::new(BVHNode::new(&mut world[..])) }
     }
@@ -1210,18 +1275,18 @@ fn main() -> Result<(), std::io::Error> {
 
     let radius = 20.0;
 
-    let mut angle = 0.0_f32;
+    let mut angle = 84.5_f32;
     let mut file_idx = 0;
     while angle < 360.0 {
         // Timing
         let start = Instant::now();
-        
+
         // Set up camera
-        let look_x = radius*(angle+90.0).to_radians().cos();
-        let look_z = radius*(angle+90.0).to_radians().sin();
-        let lookfrom = Vec3::new(look_x,1.5,look_z);
-        //let lookfrom = Vec3::new(0.0,0.0,15.0);
-        let lookat = Vec3::new(0.0,1.5,-3.0);
+        let look_x = radius*(angle).to_radians().cos();
+        let look_z = radius*(angle).to_radians().sin();
+        //let lookfrom = Vec3::new(look_x,1.5,look_z);
+        let lookfrom = Vec3::new(look_x,2.5,-3.0);
+        let lookat = Vec3::new(0.0,1.5,10.0);
         let vup = Vec3::new(0.0,1.0,0.0);
         let dist_to_focus = 10.0;
         let aperture = 0.0;
@@ -1244,7 +1309,7 @@ fn main() -> Result<(), std::io::Error> {
             c /= SAMPLES_PER_PIXEL as f32;
             *pix = c;
         });
-        
+
         // Write output
         let filename = format!("output_{:04}.ppm", file_idx);
         let file = File::create(filename.clone()).unwrap();
