@@ -96,7 +96,11 @@ fn schlick(cosine: f32, ref_idx: f32) -> f32 {
 
 trait Material {
     fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) ;
+    fn emitted(&self, _u: f32, _v: f32, _p: Vec3) -> Vec3 {
+        Vec3::new_const(0.0)
+    }
 }
+
 type MaterialSS = dyn Material+Send+Sync;
 
 impl Lambertian {
@@ -154,6 +158,21 @@ impl Material for Dielectric {
     }
 }
 
+#[derive(new)]
+struct DiffuseLight {
+    emit: Arc<TextureSS>,
+}
+
+impl Material for DiffuseLight {
+    fn scatter(&self, _r: Ray, _rec: &HitRec) -> (bool, Vec3, Ray) {
+        (false, Vec3::new_const(0.0),
+            Ray::new(Vec3::new_const(0.0), Vec3::new_const(0.0))
+        )
+    }
+    fn emitted(&self, u: f32, v: f32, p: Vec3) -> Vec3 {
+        self.emit.value(u, v, p)
+    }
+}
 
 fn random_in_unit_sphere() -> Vec3 {
     loop {
@@ -545,6 +564,78 @@ impl Hittable for Vec<Arc<HittableSS>> {
     }
 }
 
+#[derive(new)]
+struct Isotropic {
+    albedo: Arc<TextureSS>,
+}
+
+impl Material for Isotropic {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
+        let scattered = Ray::new_with_time(rec.p, random_in_unit_sphere(), r.time);
+        let attenuation = self.albedo.value(rec.u, rec.v, rec.p);
+        (true, attenuation, scattered)
+    }
+}
+
+struct ConstantMedium {
+    boundary: Arc<HittableSS>,
+    phase_function: Arc<MaterialSS>,
+    neg_inv_density: f32,
+}
+
+impl ConstantMedium {
+    fn new(boundary: Arc<HittableSS>, density: f32, albedo: Arc<TextureSS>) -> ConstantMedium {
+        ConstantMedium {
+            boundary: boundary,
+            phase_function: Arc::new(Isotropic::new(albedo.clone())),
+            neg_inv_density: -1.0/density,
+        }
+    }
+}
+
+impl Hittable for ConstantMedium {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        let mut rng = rand::thread_rng();
+        // rec1 and rec2 here define the near and far points where
+        // the ray hits the boundary of the object
+        if let Some(mut rec1) = self.boundary.hit(r, f32::NEG_INFINITY, f32::INFINITY) {
+            if let Some(mut rec2) = self.boundary.hit(r, rec1.t+0.0001, f32::INFINITY) {
+                if rec1.t < tmin { rec1.t = tmin }
+                if rec2.t > tmax { rec2.t = tmax }
+                if rec1.t >= rec2.t {
+                    return None;
+                }
+                if rec1.t < 0.0 {
+                    rec1.t = 0.0;
+                }
+                let ray_length = r.direction.length();
+                let distance_inside_boundary = (rec2.t - rec1.t) * ray_length;
+                let hit_distance = self.neg_inv_density * rng.gen::<f32>().ln();
+                if hit_distance > distance_inside_boundary {
+                    return None;
+                }
+
+                // Construct the output
+                let t = rec1.t + hit_distance / ray_length;
+
+                return Some(HitRec::new(
+                        r.at(t),
+                        Vec3::new(1.0, 0.0, 0.0), // arbitrary
+                        t,
+                        rec1.u, rec1.v,           // aribtrary
+                        true,                     // arbitrary
+                        self.phase_function.clone()
+                ));
+            }
+        }
+        None
+    }
+
+    fn bounding_box(&self, t0: f32, t1: f32) -> Option<AxisBB> {
+        self.boundary.bounding_box(t0, t1)
+    }
+}
+
 // Axis-aligned bounding box
 #[derive(new,Copy,Clone)]
 struct AxisBB {
@@ -726,11 +817,85 @@ impl Hittable for Translate {
     }
 }
 
-struct Rotate {
+struct RotateY {
     ptr: Arc<HittableSS>,
     sin_theta: f32,
     cos_theta: f32,
     bb: Option<AxisBB>,
+}
+
+impl RotateY {
+    fn new(p: Arc<HittableSS>, angle: f32) -> RotateY {
+        let sin_theta = angle.to_radians().sin();
+        let cos_theta = angle.to_radians().cos();
+
+        let bbox = p.bounding_box(0.0, 1.0).unwrap();
+
+        let mut min = Vec3::new_const(f32::INFINITY);
+        let mut max = Vec3::new_const(f32::NEG_INFINITY);
+
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    let x = if i == 1 { bbox.max.x } else { bbox.min.x } ;
+                    let y = if j == 1 { bbox.max.y } else { bbox.min.y } ;
+                    let z = if k == 1 { bbox.max.z } else { bbox.min.z } ;
+
+                    let new_x =  cos_theta*x + sin_theta*z;
+                    let new_z = -sin_theta*x + cos_theta*z;
+                    let tester = Vec3::new(new_x, y, new_z);
+                    for c in 0..3 {
+                        min[c] = fmin(min[c], tester[c]);
+                        max[c] = fmax(max[c], tester[c]);
+                    }
+                }
+            }
+        }
+
+        RotateY {
+            ptr: p,
+            sin_theta: sin_theta,
+            cos_theta: cos_theta,
+            bb: Some(AxisBB::new(min, max))
+        }
+    }
+}
+
+impl Hittable for RotateY {
+    fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec> {
+        let mut origin = r.origin;
+        let mut direction = r.direction;
+
+        origin[0] = self.cos_theta*r.origin[0] - self.sin_theta*r.origin[2];
+        origin[2] = self.sin_theta*r.origin[0] + self.cos_theta*r.origin[2];
+
+        direction[0] = self.cos_theta*r.direction[0] - self.sin_theta*r.direction[2];
+        direction[2] = self.sin_theta*r.direction[0] + self.cos_theta*r.direction[2];
+
+        let rotated_r = Ray::new_with_time(origin, direction, r.time);
+
+        if let Some(rec) = self.ptr.hit(&rotated_r, tmin, tmax) {
+            let mut p = rec.p;
+            let mut normal = rec.normal;
+
+            p[0] =  self.cos_theta*rec.p[0] + self.sin_theta*rec.p[2];
+            p[2] = -self.sin_theta*rec.p[0] + self.cos_theta*rec.p[2];
+
+            normal[0] =  self.cos_theta*rec.normal[0] + self.sin_theta*rec.normal[2];
+            normal[2] = -self.sin_theta*rec.normal[0] + self.cos_theta*rec.normal[2];
+
+            let mut out_rec = HitRec::new(p, normal, rec.t, rec.u, rec.v, rec.front, rec.material.clone());
+            out_rec.set_face_normal(&rotated_r, normal);
+
+            return Some(out_rec)
+        }
+
+        None
+    }
+
+    fn bounding_box(&self, _t0: f32, _t1: f32) -> Option<AxisBB> {
+        self.bb
+    }
 }
 
 struct Camera {
@@ -789,24 +954,25 @@ impl Camera {
 }
 
 fn ray_color(r: Ray, world: Arc<dyn Hittable>, depth: u32) -> Vec3 {
+    let background = Vec3::new_const(0.0);
+
     if depth > MAX_DEPTH {
         return Vec3::new_const(0.0);
     }
 
     if let Some(c) = world.hit(&r, 0.001, f32::INFINITY) {
         let (did_scatter, attenuation, scattered) = c.material.scatter(r, &c);
+        let emitted = c.material.emitted(c.u, c.v, c.p);
         if did_scatter {
-            return attenuation * ray_color(scattered, world, depth + 1);
+            return emitted + attenuation * ray_color(scattered, world, depth + 1);
         }
-        return Vec3::new_const(0.0);
+        else {
+            return emitted;
+        }
     }
-
-    // No hit, draw background
-    let u = r.direction.unit_vector();
-    // t is the y position, scaled to viewport
-    let t = 0.5 * (1.0 + u.y);
-    // shade with a mix of white and blue according to position
-    Vec3::new(0.5,0.7,1.0)*t + Vec3::new_const(1.0)*(1.0-t)
+    else {
+        return background;
+    }
 }
 
 fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
@@ -1172,62 +1338,6 @@ impl Bowser {
             )
         ));
 
-        // Mirrors
-        world.push(Arc::new(
-            Rect::XYRect(-5.0, 5.0, 0.0, 6.0, -8.0,
-                Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
-            )
-        ));
-        world.push(Arc::new(
-            Rect::XYRect(-5.0, 5.0, 0.0, 6.0, 8.0,
-                Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
-            )
-        ));
-
-        // Mirror frame
-        world.push(Arc::new(
-            Boxy::new(
-                Vec3::new(-5.25, 6.0, 7.75),
-                Vec3::new(5.25, 6.25, 8.0),
-                brown.clone(),
-            )
-        ));
-        world.push(Arc::new(
-            Boxy::new(
-                Vec3::new(-5.25, 0.0, 7.75),
-                Vec3::new(-5.00, 6.0, 8.0),
-                brown.clone(),
-            )
-        ));
-        world.push(Arc::new(
-            Boxy::new(
-                Vec3::new(5.00, 0.0, 7.75),
-                Vec3::new(5.25, 6.0, 8.0),
-                brown.clone(),
-            )
-        ));
-        world.push(Arc::new(
-            Boxy::new(
-                Vec3::new(-5.25, 6.0, -8.0),
-                Vec3::new(5.25, 6.25, -7.75),
-                brown.clone(),
-            )
-        ));
-        world.push(Arc::new(
-            Boxy::new(
-                Vec3::new(-5.25, 0.0, -8.0),
-                Vec3::new(-5.00, 6.0, -7.75),
-                brown.clone(),
-            )
-        ));
-        world.push(Arc::new(
-            Boxy::new(
-                Vec3::new(5.00, 0.0, -8.8),
-                Vec3::new(5.25, 6.0, -7.75),
-                brown.clone(),
-            )
-        ));
-
         Bowser { parts: Arc::new(BVHNode::new(&mut world[..])) }
     }
 }
@@ -1258,6 +1368,99 @@ fn bowser_demo(world: &mut Vec<Arc<HittableSS>>) {
         Arc::new(Bowser::new(0.0,0.0,0.0)),
         Vec3::new(0.0, -0.25, 0.0),
     )));
+
+    // Light
+    world.push(Arc::new(
+        Rect::XYRect(-2.0, 2.0, 1.0, 4.0, 3.0,
+            Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(Vec3::new_const(4.0)))))
+        )
+    ));
+
+    /* [mirrors removed for now]
+    // Mirrors
+    world.push(Arc::new(
+        Rect::XYRect(-5.0, 5.0, 0.0, 6.0, -8.0,
+            Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
+        )
+    ));
+    world.push(Arc::new(
+        Rect::XYRect(-5.0, 5.0, 0.0, 6.0, 8.0,
+            Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
+        )
+    ));
+
+    // Mirror frame
+    world.push(Arc::new(
+        Boxy::new(
+            Vec3::new(-5.25, 6.0, 7.75),
+            Vec3::new(5.25, 6.25, 8.0),
+            brown.clone(),
+        )
+    ));
+    world.push(Arc::new(
+        Boxy::new(
+            Vec3::new(-5.25, 0.0, 7.75),
+            Vec3::new(-5.00, 6.0, 8.0),
+            brown.clone(),
+        )
+    ));
+    world.push(Arc::new(
+        Boxy::new(
+            Vec3::new(5.00, 0.0, 7.75),
+            Vec3::new(5.25, 6.0, 8.0),
+            brown.clone(),
+        )
+    ));
+    world.push(Arc::new(
+        Boxy::new(
+            Vec3::new(-5.25, 6.0, -8.0),
+            Vec3::new(5.25, 6.25, -7.75),
+            brown.clone(),
+        )
+    ));
+    world.push(Arc::new(
+        Boxy::new(
+            Vec3::new(-5.25, 0.0, -8.0),
+            Vec3::new(-5.00, 6.0, -7.75),
+            brown.clone(),
+        )
+    ));
+    world.push(Arc::new(
+        Boxy::new(
+            Vec3::new(5.00, 0.0, -8.8),
+            Vec3::new(5.25, 6.0, -7.75),
+            brown.clone(),
+        )
+    ));
+    */
+}
+
+fn cornell_box(world: &mut Vec<Arc<HittableSS>>) {
+    let red   = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.65, 0.05, 0.05)))));
+    let white = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.73, 0.73, 0.73)))));
+    let green = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.12, 0.45, 0.15)))));
+    let light = Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(Vec3::new(15.0, 15.0, 15.0)))));
+    world.push(Arc::new(FlipFace::new(Arc::new(Rect::YZRect(0.0, 555.0, 0.0, 555.0, 555.0, green.clone())))));
+    world.push(Arc::new(Rect::YZRect(0.0, 555.0, 0.0, 555.0, 0.0, red.clone())));
+    world.push(Arc::new(Rect::XZRect(213.0, 343.0, 227.0, 332.0, 554.0, light.clone())));
+    world.push(Arc::new(FlipFace::new(Arc::new(Rect::XZRect(0.0, 555.0, 0.0, 555.0, 0.0, white.clone())))));
+    world.push(Arc::new(Rect::XZRect(0.0, 555.0, 0.0, 555.0, 555.0, white.clone())));
+    world.push(Arc::new(FlipFace::new(Arc::new(Rect::XYRect(0.0, 555.0, 0.0, 555.0, 555.0, white.clone())))));
+
+    let box1 = Arc::new(Boxy::new(Vec3::new_const(0.0), Vec3::new(165.0, 330.0, 165.0), white.clone()));
+    world.push(
+        Arc::new(Translate::new(
+                Arc::new(RotateY::new(box1.clone(), 15.0)),
+                Vec3::new(265.0, 0.0, 295.0),
+        )),
+    );
+    let box2 = Arc::new(Boxy::new(Vec3::new_const(0.0), Vec3::new(165.0, 165.0, 165.0), white.clone()));
+    world.push(
+        Arc::new(Translate::new(
+                Arc::new(RotateY::new(box2.clone(), -18.0)),
+                Vec3::new(130.0, 0.0, 65.0),
+        )),
+    );
 }
 
 fn main() -> Result<(), std::io::Error> {
@@ -1270,28 +1473,39 @@ fn main() -> Result<(), std::io::Error> {
     //random_spheres_demo(&mut world_vec);
     //balls_demo(&mut world_vec);
     //two_spheres_demo(&mut world_vec);
-    bowser_demo(&mut world_vec);
+    //bowser_demo(&mut world_vec);
+    cornell_box(&mut world_vec);
     let world_bvh = Arc::new(BVHNode::new(&mut world_vec[..]));
 
     let radius = 20.0;
 
-    let mut angle = 84.5_f32;
+    let mut angle = 35.0_f32;
     let mut file_idx = 0;
     while angle < 360.0 {
         // Timing
         let start = Instant::now();
 
         // Set up camera
+        /*
         let look_x = radius*(angle).to_radians().cos();
         let look_z = radius*(angle).to_radians().sin();
         //let lookfrom = Vec3::new(look_x,1.5,look_z);
-        let lookfrom = Vec3::new(look_x,2.5,-3.0);
-        let lookat = Vec3::new(0.0,1.5,10.0);
+        let lookfrom = Vec3::new(look_x,2.5,look_z);
+        let lookat = Vec3::new(0.0,1.5,-3.0);
         let vup = Vec3::new(0.0,1.0,0.0);
         let dist_to_focus = 10.0;
         let aperture = 0.0;
+        let vfov = 20.0;
+        */
 
-        let cam = Camera::new(lookfrom, lookat, vup, 20.0, ASPECT_RATIO, aperture, dist_to_focus, 0.0, 1.0);
+        let lookfrom = Vec3::new(278.0, 278.0, -800.0);
+        let lookat = Vec3::new(278.0,278.0,0.0);
+        let vup = Vec3::new(0.0,1.0,0.0);
+        let dist_to_focus = 10.0;
+        let aperture = 0.0;
+        let vfov = 40.0;
+
+        let cam = Camera::new(lookfrom, lookat, vup, vfov, ASPECT_RATIO, aperture, dist_to_focus, 0.0, 1.0);
 
         // Trace rays
         pixels.par_iter_mut().enumerate().for_each(|(i,pix)| {
