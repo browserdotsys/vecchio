@@ -36,7 +36,7 @@ impl Vec3 {
         self.length2().sqrt()
     }
 
-    pub fn unit_vector(&self) ->Vec3 {
+    pub fn unit_vector(&self) -> Vec3 {
         let norm = self.length2().sqrt();
         Vec3::new(
             self.x / norm,
