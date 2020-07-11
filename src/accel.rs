@@ -1,12 +1,12 @@
-use crate::vec3::Vec3;
-use std::sync::Arc;
-use crate::util::{fmin,fmax};
-use crate::hittable::{Hittable,HittableSS,HitRec};
-use crate::Ray;
+use crate::hittable::{HitRec, Hittable, HittableSS};
 use crate::rand::Rng;
+use crate::util::{fmax, fmin};
+use crate::vec3::Vec3;
+use crate::Ray;
+use std::sync::Arc;
 
 // Axis-aligned bounding box
-#[derive(new,Copy,Clone)]
+#[derive(new, Copy, Clone)]
 pub struct AxisBB {
     pub min: Vec3,
     pub max: Vec3,
@@ -17,10 +17,14 @@ impl AxisBB {
         let mut tmin_local = tmin;
         let mut tmax_local = tmax;
         for a in 0..3 {
-            let t0 = fmin((self.min[a] - r.origin[a]) / r.direction[a],
-                          (self.max[a] - r.origin[a]) / r.direction[a]);
-            let t1 = fmax((self.min[a] - r.origin[a]) / r.direction[a],
-                          (self.max[a] - r.origin[a]) / r.direction[a]);
+            let t0 = fmin(
+                (self.min[a] - r.origin[a]) / r.direction[a],
+                (self.max[a] - r.origin[a]) / r.direction[a],
+            );
+            let t1 = fmax(
+                (self.min[a] - r.origin[a]) / r.direction[a],
+                (self.max[a] - r.origin[a]) / r.direction[a],
+            );
             tmin_local = fmax(t0, tmin_local);
             tmax_local = fmin(t1, tmax_local);
             if tmax_local <= tmin_local {
@@ -58,26 +62,23 @@ impl Hittable for BVHNode {
         }
 
         let rec_left = self.left.hit(r, tmin, tmax);
-        let tmax_new = if let Some(r) = rec_left.as_ref() { r.t } else { tmax };
+        let tmax_new = if let Some(r) = rec_left.as_ref() {
+            r.t
+        } else {
+            tmax
+        };
         let rec_right = self.right.hit(r, tmin, tmax_new);
         match (rec_left.as_ref(), rec_right.as_ref()) {
             (Some(l), Some(r)) => {
                 if l.t < r.t {
                     rec_left
-                }
-                else {
+                } else {
                     rec_right
                 }
-            },
-            (Some(_), None) => {
-                rec_left
-            },
-            (None, Some(_)) => {
-                rec_right
-            },
-            (None, None) => {
-                None
             }
+            (Some(_), None) => rec_left,
+            (None, Some(_)) => rec_right,
+            (None, None) => None,
         }
     }
 
@@ -90,13 +91,13 @@ impl BVHNode {
     fn box_for_hittables(h1: &Arc<HittableSS>, h2: &Arc<HittableSS>) -> AxisBB {
         AxisBB::surrounding_box(
             h1.bounding_box(0.0, 0.0).unwrap(),
-            h2.bounding_box(0.0, 0.0).unwrap()
+            h2.bounding_box(0.0, 0.0).unwrap(),
         )
     }
 
     pub fn new(objects: &mut [Arc<HittableSS>]) -> BVHNode {
         let mut rng = rand::thread_rng();
-        let axis = rng.gen_range(0,3);
+        let axis = rng.gen_range(0, 3);
 
         if objects.len() == 1 {
             BVHNode {
@@ -104,11 +105,10 @@ impl BVHNode {
                 right: objects[0].clone(),
                 bb: BVHNode::box_for_hittables(&objects[0], &objects[0]),
             }
-        }
-        else if objects.len() == 2 {
+        } else if objects.len() == 2 {
             let a_bb = objects[0].bounding_box(0.0, 0.0).unwrap();
             let b_bb = objects[1].bounding_box(0.0, 0.0).unwrap();
-            let (mut i1, mut i2) = (0,1);
+            let (mut i1, mut i2) = (0, 1);
             if a_bb.min[axis] < b_bb.min[axis] {
                 i1 = 1;
                 i2 = 0;
@@ -118,16 +118,13 @@ impl BVHNode {
                 right: objects[i2].clone(),
                 bb: BVHNode::box_for_hittables(&objects[i1], &objects[i2]),
             }
-        }
-        else {
-            objects.sort_by(
-                |a,b| {
-                    let a_bb = a.bounding_box(0.0, 0.0).unwrap();
-                    let b_bb = b.bounding_box(0.0, 0.0).unwrap();
-                    a_bb.min[axis].partial_cmp(&b_bb.min[axis]).unwrap()
-                }
-            );
-            let (left_part, right_part) = objects.split_at_mut(objects.len()/2);
+        } else {
+            objects.sort_by(|a, b| {
+                let a_bb = a.bounding_box(0.0, 0.0).unwrap();
+                let b_bb = b.bounding_box(0.0, 0.0).unwrap();
+                a_bb.min[axis].partial_cmp(&b_bb.min[axis]).unwrap()
+            });
+            let (left_part, right_part) = objects.split_at_mut(objects.len() / 2);
             let left = Arc::new(BVHNode::new(left_part));
             let right = Arc::new(BVHNode::new(right_part));
             let bb = AxisBB::surrounding_box(

@@ -38,26 +38,20 @@ impl Vec3 {
 
     pub fn unit_vector(&self) -> Vec3 {
         let norm = self.length2().sqrt();
-        Vec3::new(
-            self.x / norm,
-            self.y / norm,
-            self.z / norm,
-        )
+        Vec3::new(self.x / norm, self.y / norm, self.z / norm)
     }
 
     pub fn clamp(x: f32, min: f32, max: f32) -> f32 {
         if x < min {
             min
-        }
-        else if x > max {
+        } else if x > max {
             max
-        }
-        else {
+        } else {
             x
         }
     }
 
-    pub fn to_color(&self) -> (u32,u32,u32) {
+    pub fn to_color(&self) -> (u32, u32, u32) {
         // Note: sqrt() here does gamma correction
         (
             (256.0 * Vec3::clamp(self.x.sqrt(), 0.0, 0.999)) as u32,
