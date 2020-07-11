@@ -5,7 +5,7 @@ use crate::rand::Rng;
 use crate::util::{random_in_unit_sphere, reflect, refract, schlick};
 use crate::vec3::Vec3;
 use crate::Ray;
-use arr_macro::arr;
+use array_init::array_init;
 use rand::seq::SliceRandom;
 use std::fs::File;
 use std::sync::Arc;
@@ -203,16 +203,16 @@ pub struct Perlin {
 
 pub fn trilinear_interp(c: &[[[f32; 2]; 2]; 2], u: f32, v: f32, w: f32) -> f32 {
     let mut accum: f32 = 0.0;
-    for i in 0..2 {
-        for j in 0..2 {
-            for k in 0..2 {
+    for (i, c1) in c.iter().enumerate() {
+        for (j, c2) in c1.iter().enumerate() {
+            for (k, c3) in c2.iter().enumerate() {
                 let fi = i as f32;
                 let fj = j as f32;
                 let fk = k as f32;
                 accum += (fi * u + (1.0 - fi) * (1.0 - u))
                     * (fj * v + (1.0 - fj) * (1.0 - v))
                     * (fk * w + (1.0 - fk) * (1.0 - w))
-                    * c[i][j][k];
+                    * c3;
             }
         }
     }
@@ -225,9 +225,9 @@ pub fn perlin_interp(c: &[[[Vec3; 2]; 2]; 2], u: f32, v: f32, w: f32) -> f32 {
     let vv = v * v * (3.0 - 2.0 * v);
     let ww = w * w * (3.0 - 2.0 * w);
 
-    for i in 0..2 {
-        for j in 0..2 {
-            for k in 0..2 {
+    for (i, c1) in c.iter().enumerate() {
+        for (j, c2) in c1.iter().enumerate() {
+            for (k, c3) in c2.iter().enumerate() {
                 let fi = i as f32;
                 let fj = j as f32;
                 let fk = k as f32;
@@ -235,7 +235,7 @@ pub fn perlin_interp(c: &[[[Vec3; 2]; 2]; 2], u: f32, v: f32, w: f32) -> f32 {
                 accum += (fi * uu + (1.0 - fi) * (1.0 - uu))
                     * (fj * vv + (1.0 - fj) * (1.0 - vv))
                     * (fk * ww + (1.0 - fk) * (1.0 - ww))
-                    * c[i][j][k].dot(weight_v);
+                    * c3.dot(weight_v);
             }
         }
     }
@@ -243,18 +243,18 @@ pub fn perlin_interp(c: &[[[Vec3; 2]; 2]; 2], u: f32, v: f32, w: f32) -> f32 {
 }
 
 impl Perlin {
+    const NUM_POINTS: usize = 256;
+
     pub fn new() -> Perlin {
         let mut rng = rand::thread_rng();
 
-        let random_data: [Vec3; 256] = arr![Vec3::random_range(-1.0,1.0).unit_vector(); 256];
+        let random_data: [Vec3; Perlin::NUM_POINTS] =
+            array_init(|_| Vec3::random_range(-1.0, 1.0).unit_vector());
 
         // Permutation arrays
-        let mut i: usize = 0;
-        let mut perm_x: [usize; 256] = arr![ { i += 1; i - 1 }; 256];
-        i = 0;
-        let mut perm_y: [usize; 256] = arr![ { i += 1; i - 1 }; 256];
-        i = 0;
-        let mut perm_z: [usize; 256] = arr![ { i += 1; i - 1 }; 256];
+        let mut perm_x: [usize; Perlin::NUM_POINTS] = array_init(|i| i);
+        let mut perm_y: [usize; Perlin::NUM_POINTS] = array_init(|i| i);
+        let mut perm_z: [usize; Perlin::NUM_POINTS] = array_init(|i| i);
         perm_x.shuffle(&mut rng);
         perm_y.shuffle(&mut rng);
         perm_z.shuffle(&mut rng);
@@ -290,10 +290,10 @@ impl Perlin {
         let i = p.x.floor() as usize;
         let j = p.y.floor() as usize;
         let k = p.z.floor() as usize;
-        for di in 0..2 {
-            for dj in 0..2 {
-                for dk in 0..2 {
-                    c[di][dj][dk] = self.random_data[self.perm_x[(i + di) & 255]
+        for (di, c1) in c.iter_mut().enumerate() {
+            for (dj, c2) in c1.iter_mut().enumerate() {
+                for (dk, c3) in c2.iter_mut().enumerate() {
+                    *c3 = self.random_data[self.perm_x[(i + di) & 255]
                         ^ self.perm_y[(j + dj) & 255]
                         ^ self.perm_z[(k + dk) & 255]];
                 }
