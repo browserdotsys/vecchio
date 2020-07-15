@@ -90,7 +90,9 @@ impl Iterator for RotatingCamera {
     }
 }
 
-pub fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
+pub fn balls_demo() -> SceneConfig {
+    let mut world: Vec<Arc<HittableSS>> = vec![];
+    let mut lights: Vec<Arc<HittableSS>> = vec![];
     world.push(Arc::new(Sphere::new(
         Vec3::new(0.0, 0.0, -1.0),
         0.5,
@@ -102,7 +104,7 @@ pub fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
         Vec3::new(0.0, -100.5, -1.0),
         100.0,
         Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(
-            0.8, 0.8, 0.0,
+            0.8, 0.8, 0.8,
         ))))),
     )));
     world.push(Arc::new(Sphere::new(
@@ -123,9 +125,48 @@ pub fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
         -0.45,
         Arc::new(Dielectric::new(1.5)),
     )));
+
+    // Light
+    let light_shape = Arc::new(Rect::XZRect(
+        -6.0,
+        6.0,
+        -6.0,
+        6.0,
+        8.0,
+        Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(
+            Vec3::new_const(4.0),
+    ))))));
+    world.push(Arc::new(FlipFace::new(light_shape.clone())));
+    lights.push(light_shape);
+
+    let lookfrom = Vec3::new(0.0, 2.0, 10.0);
+    let lookat = Vec3::new(0.0,1.0,0.0);
+    let vup = Vec3::new(0.0,1.0,0.0);
+    let dist_to_focus = 10.0;
+    let aperture = 0.0;
+    let vfov = 40.0;
+    let aspect_ratio = 16.0/9.0;
+    let time0 = 0.0;
+    let time1 = 1.0;
+
+    let cam = Camera::new(
+        lookfrom,
+        lookat,
+        vup,
+        vfov,
+        aspect_ratio,
+        aperture,
+        dist_to_focus,
+        time0,
+        time1,
+    );
+
+    SceneConfig::new(world, lights, Box::new(FixedCamera::new(cam)), aspect_ratio)
 }
 
-pub fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
+pub fn random_spheres_demo() -> SceneConfig {
+    let mut world: Vec<Arc<HittableSS>> = vec![];
+    let mut lights: Vec<Arc<HittableSS>> = vec![];
     // Ground
     let checker = Checker::new(
         Arc::new(SolidColor::new(Vec3::new(0.1, 0.1, 0.1))),
@@ -182,14 +223,6 @@ pub fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
         1.0,
         Arc::new(Dielectric::new(1.5)),
     )));
-    /*
-    world.push(Arc::new(
-        Sphere::new(
-            Vec3::new(-4.0, 1.0, 0.0), 1.0,
-            Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(0.4, 0.2, 0.1)))))
-        ))
-    );
-    */
     world.push(Arc::new(Sphere::new(
         Vec3::new(-4.0, 1.0, 0.0),
         1.0,
@@ -206,32 +239,53 @@ pub fn random_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
         )),
     )));
 
-    // Mirrors
-    world.push(Arc::new(Rect::XYRect(
-        -8.0,
-        0.0,
-        0.0,
-        3.5,
-        -3.0,
-        Arc::new(Metal::new(
-            Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))),
-            0.0,
-        )),
-    )));
-    world.push(Arc::new(Rect::XYRect(
-        -8.0,
-        -0.0,
-        0.0,
-        3.5,
-        3.0,
-        Arc::new(Metal::new(
-            Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))),
-            0.0,
-        )),
-    )));
+    // Big light in the sky
+    
+    let light = Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(
+        Vec3::new(1.0, 0.77, 0.56)*2.0,
+    ))));
+    let light_shape = Arc::new(Rect::XZRect(
+        -11.0, 11.0, -11.0, 11.0, 8.0, light,
+    ));
+    world.push(Arc::new(FlipFace::new(light_shape.clone())));
+    lights.push(light_shape);
+
+    // Camera
+    let radius = 20.0;
+    let height = 2.5;
+    let lookat = Vec3::new(0.0, 1.5, 0.0);
+    let vup = Vec3::new(0.0, 1.0, 0.0);
+    let dist_to_focus = 10.0;
+    let aperture = 0.0;
+    let vfov = 20.0;
+    let time0 = 0.0;
+    let time1 = 1.0;
+    let limit = 360.0;
+    let incr = 0.5;
+    let angle = 25.0;
+    let aspect_ratio = 16.0/9.0;
+    let cam_iter = Box::new(RotatingCamera::new(
+        lookat,
+        vup,
+        vfov,
+        aspect_ratio,
+        aperture,
+        dist_to_focus,
+        time0,
+        time1,
+        height,
+        angle,
+        radius,
+        incr,
+        limit,
+    ));
+
+    SceneConfig::new(world, lights, cam_iter, aspect_ratio)
 }
 
-pub fn two_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
+pub fn perlin_demo() -> SceneConfig {
+    let mut world: Vec<Arc<HittableSS>> = vec![];
+    let mut lights: Vec<Arc<HittableSS>> = vec![];
     // Ground
     let pertext = Arc::new(Lambertian::new(Arc::new(NoiseTexture::new(2.0))));
     world.push(Arc::new(Sphere::new(
@@ -247,7 +301,7 @@ pub fn two_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
     )));
 
     // Light
-    world.push(Arc::new(Rect::XZRect(
+    let light_shape = Arc::new(Rect::XZRect(
         -6.0,
         6.0,
         -6.0,
@@ -255,8 +309,32 @@ pub fn two_spheres_demo(world: &mut Vec<Arc<HittableSS>>) {
         8.0,
         Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(
             Vec3::new_const(4.0),
-        )))),
-    )));
+    ))))));
+    world.push(Arc::new(FlipFace::new(light_shape.clone())));
+    lights.push(light_shape);
+
+    let lookfrom = Vec3::new(0.0, 2.0, 10.0);
+    let lookat = Vec3::new(0.0,1.0,0.0);
+    let vup = Vec3::new(0.0,1.0,0.0);
+    let dist_to_focus = 10.0;
+    let aperture = 0.0;
+    let vfov = 40.0;
+    let aspect_ratio = 16.0/9.0;
+    let time0 = 0.0;
+    let time1 = 1.0;
+
+    let cam = Camera::new(
+        lookfrom,
+        lookat,
+        vup,
+        vfov,
+        aspect_ratio,
+        aperture,
+        dist_to_focus,
+        time0,
+        time1,
+    );
+    SceneConfig::new(world, lights, Box::new(FixedCamera::new(cam)), aspect_ratio)
 }
 
 struct Bowser {
@@ -505,9 +583,12 @@ pub fn bowser_demo() -> SceneConfig {
         1.0,
         4.0,
         3.0,
-        Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(
-            Vec3::new_const(4.0),
-        )))),
+        Arc::new(DiffuseLight::new(Arc::new(
+                    ImageTexture::new(
+                        "assets/twitter.png",
+                    ),
+                    // SolidColor::new(Vec3::new_const(4.0)),
+        ))),
     ));
     let light = Arc::new(FlipFace::new(light_shape.clone()));
     world.push(light);
@@ -523,9 +604,9 @@ pub fn bowser_demo() -> SceneConfig {
     let vfov = 20.0;
     let time0 = 0.0;
     let time1 = 1.0;
-    let limit = 360.0;
+    let limit = 360.0-35.0;
     let incr = 0.5;
-    let angle = 0.0;
+    let angle = -35.0;
     let aspect_ratio = 16.0/9.0;
     let cam_iter = Box::new(RotatingCamera::new(
         lookat,

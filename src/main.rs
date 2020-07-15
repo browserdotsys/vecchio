@@ -9,7 +9,7 @@ use accel::BVHNode;
 use hittable::HittableSS;
 use rand::Rng;
 use rayon::prelude::*;
-use scene::{bowser_demo,cornell_box,final_scene};
+use scene::{bowser_demo,cornell_box,final_scene,random_spheres_demo,perlin_demo,balls_demo};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
@@ -154,26 +154,23 @@ fn ray_color(r: Ray, world: Arc<HittableSS>, lights: Arc<HittableSS>, depth: u32
 
 fn main() -> Result<(), std::io::Error> {
     // Camera and world
-    // let (cam, world) = balls_demo();
     eprintln!("Generating scene...");
-    //random_spheres_demo(&mut world_vec);
     //balls_demo(&mut world_vec);
-    //two_spheres_demo(&mut world_vec);
-    //let mut world_vec: Vec<Arc<HittableSS>> = vec![];
-    //let (mut world_vec, cam_iter) = cornell_box();
-    //final_scene(&mut world_vec);
 
-    let mut config = match 2 {
+    let mut config = match 5 {
         0 => bowser_demo(),
         1 => cornell_box(),
         2 => final_scene(),
+        3 => random_spheres_demo(),
+        4 => perlin_demo(),
+        5 => balls_demo(),
         _ => panic!("Not a valid scene"),
     };
     //let mut config = cornell_box();
     let world_bvh = Arc::new(BVHNode::new(&mut config.world[..]));
     let important = Arc::new(config.lights);
 
-    let width: usize = 600;
+    let width: usize = 1024;
     let height: usize = ((width as f32) / config.aspect_ratio) as usize;
     let mut pixels: Vec<Vec3> = vec![Vec3::new_const(0.0); width * height];
 
