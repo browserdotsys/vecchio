@@ -9,8 +9,86 @@ use crate::material::{
 };
 use crate::vec3::Vec3;
 use crate::Ray;
+use crate::Camera;
 use rand::Rng;
 use std::sync::Arc;
+
+#[derive(new)]
+pub struct SceneConfig {
+    pub world: Vec<Arc<HittableSS>>,
+    pub lights: Vec<Arc<HittableSS>>,
+    pub cam_iter: Box<dyn Iterator<Item=Camera>>,
+    pub aspect_ratio: f32,
+}
+
+struct FixedCamera {
+    cam: Camera,
+    called: bool,
+}
+
+impl FixedCamera {
+    fn new(cam: Camera) -> FixedCamera {
+        FixedCamera { cam, called: false }
+    }
+}
+
+impl Iterator for FixedCamera {
+    type Item = Camera;
+    fn next(&mut self) -> Option<Camera> {
+        if !self.called {
+            self.called = true;
+            Some(self.cam)
+        }
+        else {
+            None
+        }
+    }
+}
+
+#[derive(new)]
+struct RotatingCamera {
+    lookat: Vec3,
+    vup: Vec3,
+    vfov: f32,
+    aspect_ratio: f32,
+    aperture: f32,
+    focus_dist: f32,
+    time0: f32,
+    time1: f32,
+    height: f32,
+    angle: f32,
+    radius: f32,
+    incr: f32,
+    limit: f32,
+}
+
+impl Iterator for RotatingCamera {
+    type Item = Camera;
+    fn next(&mut self) -> Option<Camera> {
+        if self.angle > self.limit {
+            return None;
+        }
+
+        // Set up camera
+        let look_x = self.radius * self.angle.to_radians().cos();
+        let look_z = self.radius * self.angle.to_radians().sin();
+        let lookfrom = Vec3::new(look_x, self.height, look_z);
+
+        let cam = Camera::new(
+            lookfrom,
+            self.lookat,
+            self.vup,
+            self.vfov,
+            self.aspect_ratio,
+            self.aperture,
+            self.focus_dist,
+            self.time0,
+            self.time1,
+        );
+        self.angle += self.incr;
+        Some(cam)
+    }
+}
 
 pub fn balls_demo(world: &mut Vec<Arc<HittableSS>>) {
     world.push(Arc::new(Sphere::new(
@@ -392,7 +470,9 @@ impl Hittable for Bowser {
     }
 }
 
-pub fn bowser_demo(world: &mut Vec<Arc<HittableSS>>, angle: f32) {
+pub fn bowser_demo() -> SceneConfig {
+    let mut world: Vec<Arc<HittableSS>> = vec![];
+    let mut lights: Vec<Arc<HittableSS>> = vec![];
     // Ground
     let checker = Checker::new(
         Arc::new(SolidColor::new(Vec3::new(0.1, 0.1, 0.1))),
@@ -410,16 +490,16 @@ pub fn bowser_demo(world: &mut Vec<Arc<HittableSS>>, angle: f32) {
     world.push(Arc::new(Translate::new(
         Arc::new(RotateX::new(
             Arc::new(RotateY::new(
-                Arc::new(RotateZ::new(Arc::new(Bowser::new(0.0, 0.0, 0.0)), angle)),
-                angle,
+                Arc::new(RotateZ::new(Arc::new(Bowser::new(0.0, 0.0, 0.0)), 0.0)),
+                0.0,
             )),
-            angle,
+            0.0,
         )),
         Vec3::new(0.0, 1.625, -4.5),
     )));
 
     // Light
-    world.push(Arc::new(Rect::XYRect(
+    let light_shape = Arc::new(Rect::XYRect(
         -2.0,
         2.0,
         1.0,
@@ -428,68 +508,47 @@ pub fn bowser_demo(world: &mut Vec<Arc<HittableSS>>, angle: f32) {
         Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(
             Vec3::new_const(4.0),
         )))),
-    )));
+    ));
+    let light = Arc::new(FlipFace::new(light_shape.clone()));
+    world.push(light);
+    lights.push(light_shape);
 
-    /* [mirrors removed for now]
-    // Mirrors
-    world.push(Arc::new(
-        Rect::XYRect(-5.0, 5.0, 0.0, 6.0, -8.0,
-            Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
-        )
-    ));
-    world.push(Arc::new(
-        Rect::XYRect(-5.0, 5.0, 0.0, 6.0, 8.0,
-            Arc::new(Metal::new(Arc::new(SolidColor::new(Vec3::new(0.9, 0.9, 0.9))), 0.0))
-        )
+    // Camera
+    let radius = 20.0;
+    let height = 2.5;
+    let lookat = Vec3::new(0.0, 2.0, 0.0);
+    let vup = Vec3::new(0.0, 1.0, 0.0);
+    let dist_to_focus = 10.0;
+    let aperture = 0.0;
+    let vfov = 20.0;
+    let time0 = 0.0;
+    let time1 = 1.0;
+    let limit = 360.0;
+    let incr = 0.5;
+    let angle = 0.0;
+    let aspect_ratio = 16.0/9.0;
+    let cam_iter = Box::new(RotatingCamera::new(
+        lookat,
+        vup,
+        vfov,
+        aspect_ratio,
+        aperture,
+        dist_to_focus,
+        time0,
+        time1,
+        height,
+        angle,
+        radius,
+        incr,
+        limit,
     ));
 
-    // Mirror frame
-    world.push(Arc::new(
-        Boxy::new(
-            Vec3::new(-5.25, 6.0, 7.75),
-            Vec3::new(5.25, 6.25, 8.0),
-            brown.clone(),
-        )
-    ));
-    world.push(Arc::new(
-        Boxy::new(
-            Vec3::new(-5.25, 0.0, 7.75),
-            Vec3::new(-5.00, 6.0, 8.0),
-            brown.clone(),
-        )
-    ));
-    world.push(Arc::new(
-        Boxy::new(
-            Vec3::new(5.00, 0.0, 7.75),
-            Vec3::new(5.25, 6.0, 8.0),
-            brown.clone(),
-        )
-    ));
-    world.push(Arc::new(
-        Boxy::new(
-            Vec3::new(-5.25, 6.0, -8.0),
-            Vec3::new(5.25, 6.25, -7.75),
-            brown.clone(),
-        )
-    ));
-    world.push(Arc::new(
-        Boxy::new(
-            Vec3::new(-5.25, 0.0, -8.0),
-            Vec3::new(-5.00, 6.0, -7.75),
-            brown.clone(),
-        )
-    ));
-    world.push(Arc::new(
-        Boxy::new(
-            Vec3::new(5.00, 0.0, -8.8),
-            Vec3::new(5.25, 6.0, -7.75),
-            brown.clone(),
-        )
-    ));
-    */
+    SceneConfig::new(world, lights, cam_iter, aspect_ratio)
 }
 
-pub fn cornell_box(world: &mut Vec<Arc<HittableSS>>) {
+pub fn cornell_box() -> SceneConfig {
+    let mut world: Vec<Arc<HittableSS>> = vec![];
+    let mut lights: Vec<Arc<HittableSS>> = vec![];
     let red = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(
         0.65, 0.05, 0.05,
     )))));
@@ -506,9 +565,6 @@ pub fn cornell_box(world: &mut Vec<Arc<HittableSS>>) {
         0.0, 555.0, 0.0, 555.0, 555.0, green,
     )))));
     world.push(Arc::new(Rect::YZRect(0.0, 555.0, 0.0, 555.0, 0.0, red)));
-    world.push(Arc::new(Rect::XZRect(
-        213.0, 343.0, 227.0, 332.0, 554.0, light,
-    )));
     world.push(Arc::new(FlipFace::new(Arc::new(Rect::XZRect(
         0.0,
         555.0,
@@ -537,12 +593,26 @@ pub fn cornell_box(world: &mut Vec<Arc<HittableSS>>) {
     let box1 = Arc::new(Boxy::new(
         Vec3::new_const(0.0),
         Vec3::new(165.0, 330.0, 165.0),
-        white.clone(),
+        white,
     ));
     world.push(Arc::new(Translate::new(
         Arc::new(RotateY::new(box1, 15.0)),
         Vec3::new(265.0, 0.0, 295.0),
     )));
+
+    world.push(Arc::new(Sphere::new(
+                Vec3::new(190.0, 90.0, 190.0),
+                90.0,
+                Arc::new(Dielectric::new(1.5)),
+    )));
+    
+    let light_shape = Arc::new(Rect::XZRect(
+        213.0, 343.0, 227.0, 332.0, 554.0, light
+    ));
+    world.push(Arc::new(FlipFace::new(light_shape.clone())));
+    lights.push(light_shape);
+
+    /*
     let box2 = Arc::new(Boxy::new(
         Vec3::new_const(0.0),
         Vec3::new(165.0, 165.0, 165.0),
@@ -552,9 +622,35 @@ pub fn cornell_box(world: &mut Vec<Arc<HittableSS>>) {
         Arc::new(RotateY::new(box2, -18.0)),
         Vec3::new(130.0, 0.0, 65.0),
     )));
+    */
+
+    let lookfrom = Vec3::new(278.0, 278.0, -800.0);
+    let lookat = Vec3::new(278.0,278.0,0.0);
+    let vup = Vec3::new(0.0,1.0,0.0);
+    let dist_to_focus = 10.0;
+    let aperture = 0.0;
+    let vfov = 40.0;
+    let aspect_ratio = 1.0;
+    let time0 = 0.0;
+    let time1 = 1.0;
+
+    let cam = Camera::new(
+        lookfrom,
+        lookat,
+        vup,
+        vfov,
+        aspect_ratio,
+        aperture,
+        dist_to_focus,
+        time0,
+        time1,
+    );
+    SceneConfig::new(world, lights, Box::new(FixedCamera::new(cam)), aspect_ratio)
 }
 
-pub fn final_scene(objects: &mut Vec<Arc<HittableSS>>) {
+pub fn final_scene() -> SceneConfig {
+    let mut objects: Vec<Arc<HittableSS>> = vec![];
+    let mut lights: Vec<Arc<HittableSS>> = vec![];
     let mut rng = rand::thread_rng();
     let mut boxes1: Vec<Arc<HittableSS>> = vec![];
     let ground = Arc::new(Lambertian::new(Arc::new(SolidColor::new(Vec3::new(
@@ -585,9 +681,11 @@ pub fn final_scene(objects: &mut Vec<Arc<HittableSS>>) {
     let light = Arc::new(DiffuseLight::new(Arc::new(SolidColor::new(
         Vec3::new_const(7.0),
     ))));
-    objects.push(Arc::new(Rect::XZRect(
+    let light_shape = Arc::new(Rect::XZRect(
         123.0, 423.0, 147.0, 412.0, 554.0, light,
-    )));
+    ));
+    objects.push(Arc::new(FlipFace::new(light_shape.clone())));
+    lights.push(light_shape);
 
     let center1 = Vec3::new(400.0, 400.0, 200.0);
     let center2 = center1 + Vec3::new(30.0, 0.0, 0.0);
@@ -670,4 +768,26 @@ pub fn final_scene(objects: &mut Vec<Arc<HittableSS>>) {
         Arc::new(RotateY::new(Arc::new(BVHNode::new(&mut boxes2)), 15.0)),
         Vec3::new(-100.0, 270.0, 395.0),
     )));
+
+    let lookfrom = Vec3::new(478.0, 278.0, -600.0);
+    let lookat = Vec3::new(278.0, 278.0, 0.0);
+    let vup = Vec3::new(0.0, 1.0, 0.0);
+    let vfov = 40.0;
+    let dist_to_focus = 10.0;
+    let aperture = 0.0;
+    let aspect_ratio = 1.0;
+    let time0 = 0.0;
+    let time1 = 1.0;
+    let cam = Camera::new(
+        lookfrom,
+        lookat,
+        vup,
+        vfov,
+        aspect_ratio,
+        aperture,
+        dist_to_focus,
+        time0,
+        time1,
+    );
+    SceneConfig::new(objects, lights, Box::new(FixedCamera::new(cam)), aspect_ratio)
 }

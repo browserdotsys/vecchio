@@ -6,16 +6,16 @@ extern crate rand;
 extern crate rayon;
 
 use accel::BVHNode;
-use hittable::{Hittable, HittableSS};
+use hittable::HittableSS;
 use rand::Rng;
 use rayon::prelude::*;
-use scene::bowser_demo;
+use scene::{bowser_demo,cornell_box,final_scene};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufWriter;
 use std::sync::Arc;
 use std::time::Instant;
-use util::random_in_unit_disk;
+use util::{random_in_unit_disk,HittablePDF,MixturePDF,PDF};
 use vec3::Vec3;
 
 mod accel;
@@ -25,10 +25,7 @@ mod scene;
 mod util;
 mod vec3;
 
-const ASPECT_RATIO: f32 = 16.0 / 9.0;
-const WIDTH: usize = 1024;
-const HEIGHT: usize = ((WIDTH as f32) / ASPECT_RATIO) as usize;
-const SAMPLES_PER_PIXEL: usize = 100;
+const SAMPLES_PER_PIXEL: usize = 1000;
 const MAX_DEPTH: u32 = 100;
 
 #[derive(Copy, Clone)]
@@ -56,7 +53,8 @@ impl Ray {
     }
 }
 
-struct Camera {
+#[derive(Copy, Clone)]
+pub struct Camera {
     origin: Vec3,
     lower_left_corner: Vec3,
     horizontal: Vec3,
@@ -122,7 +120,7 @@ impl Camera {
     }
 }
 
-fn ray_color(r: Ray, world: Arc<dyn Hittable>, depth: u32) -> Vec3 {
+fn ray_color(r: Ray, world: Arc<HittableSS>, lights: Arc<HittableSS>, depth: u32) -> Vec3 {
     let background = Vec3::new_const(0.0);
 
     if depth > MAX_DEPTH {
@@ -130,10 +128,22 @@ fn ray_color(r: Ray, world: Arc<dyn Hittable>, depth: u32) -> Vec3 {
     }
 
     if let Some(c) = world.hit(&r, 0.001, f32::INFINITY) {
-        let (did_scatter, attenuation, scattered) = c.material.scatter(r, &c);
-        let emitted = c.material.emitted(c.u, c.v, c.p);
-        if did_scatter {
-            emitted + attenuation * ray_color(scattered, world, depth + 1)
+        let emitted = c.material.emitted(&c, c.u, c.v, c.p);
+        if let Some(srec) = c.material.scatter_with_pdf(r, &c) {
+            // Specular!
+            if let Some(spec) = srec.specular_ray {
+                return srec.attenuation *
+                    ray_color(spec, world, lights, depth + 1);
+            }
+
+            let p_important = HittablePDF::new(lights.clone(), c.p);
+            let p = MixturePDF::new(Arc::new(p_important), 0.5, srec.pdf.clone(), 0.5);
+
+            let scattered = Ray::new_with_time(c.p, p.generate(), r.time);
+            let pdf = p.value(scattered.direction);
+            emitted +
+                srec.attenuation * c.material.scattering_pdf(r, &c, scattered) *
+                ray_color(scattered, world, lights, depth + 1) / pdf
         } else {
             emitted
         }
@@ -143,72 +153,50 @@ fn ray_color(r: Ray, world: Arc<dyn Hittable>, depth: u32) -> Vec3 {
 }
 
 fn main() -> Result<(), std::io::Error> {
-    let mut pixels: Vec<Vec3> = vec![Vec3::new_const(0.0); WIDTH * HEIGHT];
-
     // Camera and world
     // let (cam, world) = balls_demo();
     eprintln!("Generating scene...");
     //random_spheres_demo(&mut world_vec);
     //balls_demo(&mut world_vec);
     //two_spheres_demo(&mut world_vec);
-    //cornell_box(&mut world_vec);
+    //let mut world_vec: Vec<Arc<HittableSS>> = vec![];
+    //let (mut world_vec, cam_iter) = cornell_box();
     //final_scene(&mut world_vec);
 
-    let radius = 20.0;
+    let mut config = match 2 {
+        0 => bowser_demo(),
+        1 => cornell_box(),
+        2 => final_scene(),
+        _ => panic!("Not a valid scene"),
+    };
+    //let mut config = cornell_box();
+    let world_bvh = Arc::new(BVHNode::new(&mut config.world[..]));
+    let important = Arc::new(config.lights);
 
-    let mut angle = 0.0_f32;
+    let width: usize = 600;
+    let height: usize = ((width as f32) / config.aspect_ratio) as usize;
+    let mut pixels: Vec<Vec3> = vec![Vec3::new_const(0.0); width * height];
+
     let mut file_idx = 0;
-    while file_idx < 1000 {
-        let mut world_vec: Vec<Arc<HittableSS>> = vec![];
-        bowser_demo(&mut world_vec, angle);
-        let world_bvh = Arc::new(BVHNode::new(&mut world_vec[..]));
+    for cam in config.cam_iter {
         // Timing
         let start = Instant::now();
 
-        // Set up camera
-        let look_x = radius * (35.0_f32).to_radians().cos();
-        let look_z = radius * (35.0_f32).to_radians().sin();
-        //let lookfrom = Vec3::new(look_x,1.5,look_z);
-        let lookfrom = Vec3::new(look_x, 2.5, look_z);
-        let lookat = Vec3::new(0.0, 2.0, 0.0);
-        let vup = Vec3::new(0.0, 1.0, 0.0);
-        let dist_to_focus = 10.0;
-        let aperture = 0.0;
-        let vfov = 20.0;
-
-        /*
-        let lookfrom = Vec3::new(478.0, 278.0, -600.0);
-        let lookat = Vec3::new(278.0,278.0,0.0);
-        let vup = Vec3::new(0.0,1.0,0.0);
-        let dist_to_focus = 10.0;
-        let aperture = 0.0;
-        let vfov = 40.0;
-        */
-
-        let cam = Camera::new(
-            lookfrom,
-            lookat,
-            vup,
-            vfov,
-            ASPECT_RATIO,
-            aperture,
-            dist_to_focus,
-            0.0,
-            1.0,
-        );
-
         // Trace rays
         pixels.par_iter_mut().enumerate().for_each(|(i, pix)| {
-            let x = i % WIDTH;
-            let y = i / WIDTH;
+            let x = i % width;
+            let y = i / width;
             let mut rng = rand::thread_rng();
             let mut c = Vec3::new_const(0.0);
             for _ in 0..SAMPLES_PER_PIXEL {
-                let u = ((x as f32) + rng.gen::<f32>()) / ((WIDTH - 1) as f32);
-                let v = ((y as f32) + rng.gen::<f32>()) / ((HEIGHT - 1) as f32);
+                let u = ((x as f32) + rng.gen::<f32>()) / ((width - 1) as f32);
+                let v = ((y as f32) + rng.gen::<f32>()) / ((height - 1) as f32);
                 let ray = cam.get_ray(u, v);
-                let color = ray_color(ray, world_bvh.clone(), 1);
-                c += color;
+                let color = ray_color(ray, world_bvh.clone(), important.clone(), 1);
+                // Filter NaN and infinity
+                if color.x.is_finite() && color.y.is_finite() && color.z.is_finite() {
+                    c += color;
+                }
             }
             c /= SAMPLES_PER_PIXEL as f32;
             *pix = c;
@@ -220,18 +208,17 @@ fn main() -> Result<(), std::io::Error> {
         let mut wr = BufWriter::new(&file);
 
         writeln!(&mut wr, "P3")?;
-        writeln!(&mut wr, "{} {}", WIDTH, HEIGHT)?;
+        writeln!(&mut wr, "{} {}", width, height)?;
         writeln!(&mut wr, "255")?;
 
-        for y in { 0..HEIGHT }.rev() {
-            for x in 0..WIDTH {
-                let (ir, ig, ib) = pixels[y * WIDTH + x].to_color();
+        for y in { 0..height }.rev() {
+            for x in 0..width {
+                let (ir, ig, ib) = pixels[y * width + x].to_color();
                 writeln!(&mut wr, "{} {} {}", ir, ig, ib)?;
             }
         }
         eprintln!("Wrote frame {} in {}s", filename, start.elapsed().as_secs());
 
-        angle += 0.5;
         file_idx += 1;
     }
 

@@ -1,8 +1,9 @@
 use crate::accel::AxisBB;
 use crate::material::Isotropic;
 use crate::material::{MaterialSS, TextureSS};
-use crate::rand::Rng;
-use crate::util::{fmax, fmin};
+use rand::Rng;
+use rand::seq::SliceRandom;
+use crate::util::{fmax, fmin, ONB};
 use crate::vec3::Vec3;
 use crate::Ray;
 use std::sync::Arc;
@@ -32,6 +33,12 @@ impl HitRec {
 pub trait Hittable {
     fn hit(&self, r: &Ray, tmin: f32, tmax: f32) -> Option<HitRec>;
     fn bounding_box(&self, t0: f32, t1: f32) -> Option<AxisBB>;
+    fn pdf_value(&self, _o: Vec3, _v: Vec3) -> f32 {
+        0.0
+    }
+    fn random(&self, _o: Vec3) -> Vec3 {
+        Vec3::new(1.0, 0.0, 0.0)
+    }
 }
 
 pub type HittableSS = dyn Hittable + Send + Sync;
@@ -93,6 +100,37 @@ impl Hittable for Sphere {
             self.center + Vec3::new_const(self.radius),
         ))
     }
+
+    fn pdf_value(&self, o: Vec3, d: Vec3) -> f32 {
+        if self.hit(&Ray::new(o,d), 0.001, f32::INFINITY).is_some() {
+            let cos_theta_max = (1.0 - self.radius*self.radius/(self.center - o).length2()).sqrt();
+            let solid_angle = 2.0*std::f32::consts::PI*(1.0-cos_theta_max);
+            1.0 / solid_angle
+        }
+        else {
+            0.0
+        }
+    }
+
+    fn random(&self, o: Vec3) -> Vec3 {
+        let direction = self.center - o;
+        let distance_squared = direction.length2();
+        let uvw = ONB::new_from_w(direction);
+        uvw.local(random_to_sphere(self.radius, distance_squared))
+    }
+}
+
+fn random_to_sphere(radius: f32, distance_squared: f32) -> Vec3 {
+    let mut rng = rand::thread_rng();
+    let r1 = rng.gen::<f32>();
+    let r2 = rng.gen::<f32>();
+    let z = 1.0 + r2*((1.0-radius*radius/distance_squared).sqrt() - 1.0);
+
+    let phi = 2.0*std::f32::consts::PI*r1;
+    let x = phi.cos()*(1.0-z*z);
+    let y = phi.sin()*(1.0-z*z);
+
+    Vec3::new(x,y,z)
 }
 
 #[derive(new)]
@@ -229,6 +267,28 @@ impl Hittable for Rect {
         v2[self.axis2] = self.k + 0.0001;
         Some(AxisBB::new(v1, v2))
     }
+
+    fn pdf_value(&self, origin: Vec3, v: Vec3) -> f32 {
+        if let Some(rec) = self.hit(&Ray::new(origin, v), 0.001, f32::INFINITY) {
+            let area = (self.c1 - self.c0) * (self.d1 - self.d0);
+            let distance_squared = rec.t * rec.t * v.length2();
+            let cosine = v.dot(rec.normal).abs() / v.length();
+
+            distance_squared / (cosine * area)
+        }
+        else {
+            0.0
+        }
+    }
+
+    fn random(&self, origin: Vec3) -> Vec3 {
+        let mut rng = rand::thread_rng();
+        let mut random_point = Vec3::new_const(0.0);
+        random_point[self.axis0] = rng.gen_range(self.c0, self.c1);
+        random_point[self.axis1] = rng.gen_range(self.d0, self.d1);
+        random_point[self.axis2] = self.k;
+        random_point - origin
+    }
 }
 
 #[derive(new)]
@@ -347,6 +407,21 @@ impl Hittable for Vec<Arc<HittableSS>> {
         }
 
         output_box
+    }
+
+    fn pdf_value(&self, o: Vec3, v: Vec3) -> f32 {
+        let weight = 1.0 / (self.len() as f32);
+        let mut sum = 0.0_f32;
+        for obj in self {
+            sum += weight * obj.pdf_value(o, v);
+        }
+        sum
+    }
+
+    fn random(&self, o: Vec3) -> Vec3 {
+        let mut rng = rand::thread_rng();
+        let obj = self.choose(&mut rng).unwrap();
+        obj.random(o)
     }
 }
 

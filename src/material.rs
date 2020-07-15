@@ -2,7 +2,7 @@
 
 use crate::hittable::HitRec;
 use crate::rand::Rng;
-use crate::util::{random_in_unit_sphere, reflect, refract, schlick};
+use crate::util::{random_in_unit_sphere, reflect, refract, schlick, CosinePDF, PDFSS};
 use crate::vec3::Vec3;
 use crate::Ray;
 use array_init::array_init;
@@ -11,13 +11,101 @@ use std::fs::File;
 use std::sync::Arc;
 
 #[derive(new)]
+pub struct ScatterRec {
+    pub specular_ray: Option<Ray>,
+    pub attenuation: Vec3,
+    pub pdf: Arc<PDFSS>,
+}
+
+pub trait Material {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> Option<(Vec3, Ray)> {
+        if let Some(srec) = self.scatter_with_pdf(r, rec) {
+            Some((srec.attenuation, srec.specular_ray.unwrap()))
+        }
+        else {
+            None
+        }
+    }
+
+    fn scatter_with_pdf(&self, _r: Ray, _rec: &HitRec) -> Option<ScatterRec> {
+        None
+    }
+
+    fn scattering_pdf(&self, _r: Ray, _rec: &HitRec, _s: Ray) -> f32 {
+        0.0
+    }
+
+    fn emitted(&self, _rec: &HitRec, _u: f32, _v: f32, _p: Vec3) -> Vec3 {
+        Vec3::new_const(0.0)
+    }
+}
+
+pub type MaterialSS = dyn Material + Send + Sync;
+
+#[derive(new)]
 pub struct Lambertian {
     albedo: Arc<TextureSS>,
 }
 
-#[derive(new)]
-pub struct Dielectric {
-    ref_idx: f32,
+impl Lambertian {
+    fn random() -> Vec3 {
+        let mut rng = rand::thread_rng();
+        let a = rng.gen_range(0.0, 2.0 * std::f32::consts::PI);
+        let z = rng.gen_range(-1.0, 1.0);
+        let r = ((1.0 - z * z) as f32).sqrt();
+
+        Vec3::new(r * a.cos(), r * a.sin(), z)
+    }
+
+    fn random_in_hemisphere(normal: Vec3) -> Vec3 {
+        let in_unit_sphere = random_in_unit_sphere();
+        if in_unit_sphere.dot(normal) > 0.0 {
+            in_unit_sphere
+        }
+        else {
+            -in_unit_sphere
+        }
+    }
+
+    fn random_cosine_direction() -> Vec3 {
+        let mut rng = rand::thread_rng();
+        let r1 = rng.gen::<f32>();
+        let r2 = rng.gen::<f32>();
+        let z = (1.0-r2).sqrt();
+
+        let phi = 2.0*r1*std::f32::consts::PI;
+        let x = phi.cos()*r2.sqrt();
+        let y = phi.sin()*r2.sqrt();
+
+        Vec3::new(x, y, z)
+    }
+}
+
+impl Material for Lambertian {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> Option<(Vec3,Ray)> {
+        let scatter_direction = rec.normal + Lambertian::random();
+        let scattered = Ray::new_with_time(rec.p, scatter_direction, r.time);
+        let attenuation = self.albedo.value(rec.u, rec.v, rec.p);
+        Some((attenuation, scattered))
+    }
+
+    fn scatter_with_pdf(&self, _r: Ray, rec: &HitRec) -> Option<ScatterRec> {
+        Some(ScatterRec::new(
+            None,
+            self.albedo.value(rec.u, rec.v, rec.p),
+            Arc::new(CosinePDF::new(rec.normal)),
+        ))
+    }
+
+    fn scattering_pdf(&self, _r: Ray, rec: &HitRec, s: Ray) -> f32 {
+        let cos = rec.normal.dot(s.direction.unit_vector());
+        if cos < 0.0 {
+            0.0
+        }
+        else {
+            cos / std::f32::consts::PI
+        }
+    }
 }
 
 #[derive(new)]
@@ -26,37 +114,8 @@ pub struct Metal {
     fuzz: f32,
 }
 
-pub trait Material {
-    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray);
-    fn emitted(&self, _u: f32, _v: f32, _p: Vec3) -> Vec3 {
-        Vec3::new_const(0.0)
-    }
-}
-
-pub type MaterialSS = dyn Material + Send + Sync;
-
-impl Lambertian {
-    pub fn random() -> Vec3 {
-        let mut rng = rand::thread_rng();
-        let a = rng.gen_range(0.0, 2.0 * std::f32::consts::PI);
-        let z = rng.gen_range(-1.0, 1.0);
-        let r = ((1.0 - z * z) as f32).sqrt();
-
-        Vec3::new(r * a.cos(), r * a.sin(), z)
-    }
-}
-
-impl Material for Lambertian {
-    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
-        let scatter_direction = rec.normal + Lambertian::random();
-        let scattered = Ray::new_with_time(rec.p, scatter_direction, r.time);
-        let attenuation = self.albedo.value(rec.u, rec.v, rec.p);
-        (true, attenuation, scattered)
-    }
-}
-
 impl Material for Metal {
-    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> Option<(Vec3,Ray)> {
         let reflected = reflect(r.direction.unit_vector(), rec.normal);
         let scattered = Ray::new_with_time(
             rec.p,
@@ -64,13 +123,31 @@ impl Material for Metal {
             r.time,
         );
         let attenuation = self.albedo.value(rec.u, rec.v, rec.p);
-        let did_scatter = scattered.direction.dot(rec.normal) > 0.0;
-        (did_scatter, attenuation, scattered)
+        if scattered.direction.dot(rec.normal) > 0.0 {
+            Some((attenuation, scattered))
+        }
+        else {
+            None
+        }
+    }
+
+    fn scatter_with_pdf(&self, r: Ray, rec: &HitRec) -> Option<ScatterRec> {
+        let reflected = reflect(r.direction.unit_vector(), rec.normal);
+        Some(ScatterRec::new(
+            Some(Ray::new(rec.p, reflected+random_in_unit_sphere()*self.fuzz)),
+            self.albedo.value(rec.u, rec.v, rec.p),
+            Arc::new(CosinePDF::new(rec.normal)), // No null pointers in rust - make it an Option<Arc>?
+        ))
     }
 }
 
+#[derive(new)]
+pub struct Dielectric {
+    ref_idx: f32,
+}
+
 impl Material for Dielectric {
-    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> Option<(Vec3,Ray)> {
         let mut rng = rand::thread_rng();
         let attenuation = Vec3::new_const(1.0);
         let etai_over_etat = if rec.front {
@@ -84,17 +161,48 @@ impl Material for Dielectric {
         if etai_over_etat * sin_theta > 1.0 {
             let reflected = reflect(unit_direction, rec.normal);
             let scattered = Ray::new_with_time(rec.p, reflected, r.time);
-            return (true, attenuation, scattered);
+            return Some((attenuation, scattered));
         }
         let reflect_prob = schlick(cos_theta, etai_over_etat);
         if rng.gen::<f32>() < reflect_prob {
             let reflected = reflect(unit_direction, rec.normal);
             let scattered = Ray::new_with_time(rec.p, reflected, r.time);
-            return (true, attenuation, scattered);
+            return Some((attenuation, scattered));
         }
         let refracted = refract(unit_direction, rec.normal, etai_over_etat);
         let scattered = Ray::new_with_time(rec.p, refracted, r.time);
-        (true, attenuation, scattered)
+        Some((attenuation, scattered))
+    }
+
+    fn scatter_with_pdf(&self, r: Ray, rec: &HitRec) -> Option<ScatterRec> {
+        let mut rng = rand::thread_rng();
+        let mut srec = ScatterRec::new(
+            None,                                 // fill in later
+            Vec3::new_const(1.0),                 // white
+            Arc::new(CosinePDF::new(rec.normal)), // No null pointers in rust - make it an Option<Arc>?
+        );
+        let etai_over_etat = if rec.front {
+            1.0 / self.ref_idx
+        } else {
+            self.ref_idx
+        };
+        let unit_direction = r.direction.unit_vector();
+        let cos_theta = (-unit_direction).dot(rec.normal).min(1.0);
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+        if etai_over_etat * sin_theta > 1.0 {
+            let reflected = reflect(unit_direction, rec.normal);
+            srec.specular_ray = Some(Ray::new_with_time(rec.p, reflected, r.time));
+            return Some(srec);
+        }
+        let reflect_prob = schlick(cos_theta, etai_over_etat);
+        if rng.gen::<f32>() < reflect_prob {
+            let reflected = reflect(unit_direction, rec.normal);
+            srec.specular_ray = Some(Ray::new_with_time(rec.p, reflected, r.time));
+            return Some(srec);
+        }
+        let refracted = refract(unit_direction, rec.normal, etai_over_etat);
+        srec.specular_ray = Some(Ray::new_with_time(rec.p, refracted, r.time));
+        Some(srec)
     }
 }
 
@@ -104,15 +212,16 @@ pub struct DiffuseLight {
 }
 
 impl Material for DiffuseLight {
-    fn scatter(&self, _r: Ray, _rec: &HitRec) -> (bool, Vec3, Ray) {
-        (
-            false,
-            Vec3::new_const(0.0),
-            Ray::new(Vec3::new_const(0.0), Vec3::new_const(0.0)),
-        )
+    fn scatter(&self, _r: Ray, _rec: &HitRec) -> Option<(Vec3,Ray)> {
+        None
     }
-    fn emitted(&self, u: f32, v: f32, p: Vec3) -> Vec3 {
-        self.emit.value(u, v, p)
+    fn emitted(&self, rec: &HitRec, u: f32, v: f32, p: Vec3) -> Vec3 {
+        if rec.front {
+            self.emit.value(u, v, p)
+        }
+        else {
+            Vec3::new_const(0.0)
+        }
     }
 }
 
@@ -330,9 +439,27 @@ pub struct Isotropic {
 }
 
 impl Material for Isotropic {
-    fn scatter(&self, r: Ray, rec: &HitRec) -> (bool, Vec3, Ray) {
+    fn scatter(&self, r: Ray, rec: &HitRec) -> Option<(Vec3,Ray)> {
         let scattered = Ray::new_with_time(rec.p, random_in_unit_sphere(), r.time);
         let attenuation = self.albedo.value(rec.u, rec.v, rec.p);
-        (true, attenuation, scattered)
+        Some((attenuation, scattered))
+    }
+
+    fn scatter_with_pdf(&self, _r: Ray, rec: &HitRec) -> Option<ScatterRec> {
+        Some(ScatterRec::new(
+            None,
+            self.albedo.value(rec.u, rec.v, rec.p),
+            Arc::new(CosinePDF::new(rec.normal)),
+        ))
+    }
+
+    fn scattering_pdf(&self, _r: Ray, rec: &HitRec, s: Ray) -> f32 {
+        let cos = rec.normal.dot(s.direction.unit_vector());
+        if cos < 0.0 {
+            0.0
+        }
+        else {
+            cos / std::f32::consts::PI
+        }
     }
 }
