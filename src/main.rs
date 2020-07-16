@@ -155,9 +155,8 @@ fn ray_color(r: Ray, world: Arc<HittableSS>, lights: Arc<HittableSS>, depth: u32
 fn main() -> Result<(), std::io::Error> {
     // Camera and world
     eprintln!("Generating scene...");
-    //balls_demo(&mut world_vec);
 
-    let mut config = match 5 {
+    let mut config = match 1 {
         0 => bowser_demo(),
         1 => cornell_box(),
         2 => final_scene(),
@@ -166,11 +165,10 @@ fn main() -> Result<(), std::io::Error> {
         5 => balls_demo(),
         _ => panic!("Not a valid scene"),
     };
-    //let mut config = cornell_box();
     let world_bvh = Arc::new(BVHNode::new(&mut config.world[..]));
     let important = Arc::new(config.lights);
 
-    let width: usize = 1024;
+    let width: usize = 900;
     let height: usize = ((width as f32) / config.aspect_ratio) as usize;
     let mut pixels: Vec<Vec3> = vec![Vec3::new_const(0.0); width * height];
 
