@@ -367,6 +367,14 @@ impl Hittable for Boxy {
     fn bounding_box(&self, _t0: f32, _t1: f32) -> Option<AxisBB> {
         Some(AxisBB::new(self.box_min, self.box_max))
     }
+
+    fn pdf_value(&self, o: Vec3, v: Vec3) -> f32 {
+        self.sides.pdf_value(o, v)
+    }
+
+    fn random(&self, o: Vec3) -> Vec3 {
+        self.sides.random(o)
+    }
 }
 
 impl Hittable for Vec<Arc<HittableSS>> {

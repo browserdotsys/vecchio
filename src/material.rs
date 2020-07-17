@@ -463,3 +463,25 @@ impl Material for Isotropic {
         }
     }
 }
+
+#[derive(new)]
+pub struct SpecDiffuse {
+    specular: Arc<MaterialSS>,
+    diffuse: Arc<MaterialSS>,
+}
+
+impl Material for SpecDiffuse {
+    fn scatter_with_pdf(&self, r: Ray, rec: &HitRec) -> Option<ScatterRec> {
+        let mut rng = rand::thread_rng();
+        if rng.gen::<f32>() < 0.5 {
+            self.specular.scatter_with_pdf(r, rec)
+        }
+        else {
+            self.diffuse.scatter_with_pdf(r, rec)
+        }
+    }
+
+    fn scattering_pdf(&self, r: Ray, rec: &HitRec, s: Ray) -> f32 {
+        self.diffuse.scattering_pdf(r, rec, s)
+    }
+}
