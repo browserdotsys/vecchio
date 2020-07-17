@@ -468,12 +468,13 @@ impl Material for Isotropic {
 pub struct SpecDiffuse {
     specular: Arc<MaterialSS>,
     diffuse: Arc<MaterialSS>,
+    pct: f32,
 }
 
 impl Material for SpecDiffuse {
     fn scatter_with_pdf(&self, r: Ray, rec: &HitRec) -> Option<ScatterRec> {
         let mut rng = rand::thread_rng();
-        if rng.gen::<f32>() < 0.5 {
+        if rng.gen::<f32>() < self.pct {
             self.specular.scatter_with_pdf(r, rec)
         }
         else {
